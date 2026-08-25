@@ -313,3 +313,87 @@ class StartupTests(unittest.TestCase):
             app._sort(column)
             self.root.update()
         self.assertEqual(self.raised, [])
+
+
+@unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
+class DrawnWidgetTests(unittest.TestCase):
+    """
+    The window uses drawn replacements for the ttk widgets whose look comes
+    from the platform theme - checkbox, scrollbar, dropdown. They have to
+    keep behaving like the things they replaced.
+    """
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+
+    def test_a_checkbox_drives_its_variable_both_ways(self):
+        var = tk.BooleanVar(value=False)
+        fired = []
+        box = appmod.CheckBox(self.root, "Only good", var,
+                              command=lambda: fired.append(True))
+        box._toggle()
+        self.assertTrue(var.get())
+        self.assertEqual(len(fired), 1)
+        box._toggle()
+        self.assertFalse(var.get())
+
+    def test_a_checkbox_follows_the_variable_when_set_elsewhere(self):
+        var = tk.BooleanVar(value=False)
+        appmod.CheckBox(self.root, "x", var)
+        var.set(True)                     # no exception from the redraw
+        self.root.update()
+
+    def test_the_dropdown_keeps_the_combobox_api_the_app_uses(self):
+        var = tk.StringVar()
+        drop = appmod.Dropdown(self.root, textvariable=var)
+        drop["values"] = ["first", "second", "third"]
+        self.assertEqual(drop["values"], ["first", "second", "third"])
+        drop.current(1)
+        self.assertEqual(var.get(), "second")
+        self.assertEqual(drop.current(), 1)
+
+    def test_the_dropdown_survives_being_given_nothing(self):
+        var = tk.StringVar()
+        drop = appmod.Dropdown(self.root, textvariable=var)
+        drop["values"] = []
+        drop.current(0)                   # out of range, must not raise
+        self.assertEqual(drop.current(), -1)
+
+    def test_choosing_tells_the_caller_straight_away(self):
+        """
+        Not via the virtual event: Tk puts those through the event loop, so a
+        caller has no guarantee of having heard anything by the time the
+        choice returns. The direct callback is what the window relies on.
+        """
+        var = tk.StringVar()
+        heard = []
+        drop = appmod.Dropdown(self.root, textvariable=var,
+                               command=lambda: heard.append(var.get()))
+        drop["values"] = ["one", "two"]
+        drop._choose("two")
+        self.assertEqual(heard, ["two"])
+
+    def test_choosing_updates_the_drive_detail_in_the_window(self):
+        app = appmod.App(self.root)
+        if len(app.volumes) < 2:
+            self.skipTest("needs at least two drives")
+        second = app._short_label(app.volumes[1][0])
+        app.drive_box._choose(second)
+        self.assertEqual(app.drive_detail.get(), app.volumes[1][1])
+
+    def test_the_scrollbar_accepts_what_a_treeview_sends_it(self):
+        moved = []
+        bar = appmod.ThinScrollbar(self.root, command=lambda *a:
+                                   moved.append(a))
+        bar.set(0.0, 0.5)                 # the yscrollcommand contract
+        bar.set("0.25", "0.75")           # Tk sends these as strings
+        self.root.update()
+
+    def test_a_fully_visible_list_draws_no_thumb(self):
+        """Nothing to scroll should show nothing, not a full-height bar."""
+        bar = appmod.ThinScrollbar(self.root, command=lambda *a: None)
+        bar.set(0.0, 1.0)
+        self.root.update()
+        self.assertEqual(bar.find_all(), ())

@@ -187,6 +187,244 @@ class PillButton(tk.Canvas):
         return super().__getitem__(key)
 
 
+class CheckBox(tk.Canvas):
+    """
+    A drawn checkbox.
+
+    ttk's indicator is a sunken square with a tick in it - the single most
+    dated-looking element in the whole window. This is a rounded box that
+    fills with the accent colour, which is what every current application
+    looks like.
+    """
+
+    BOX = 17
+
+    def __init__(self, master, text, variable, command=None, font=None,
+                 background=SIDEBAR, **kw):
+        self.variable = variable
+        self.command = command
+        self._font = font or ("TkDefaultFont", 11)
+        measure = tkfont.Font(font=self._font)
+        width = self.BOX + 8 + measure.measure(text) + 4
+        super().__init__(master, width=width, height=self.BOX + 6,
+                         highlightthickness=0, bd=0, background=background,
+                         takefocus=1, **kw)
+        self._text = text
+        self._draw()
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            self.bind(sequence, self._toggle)
+        self.bind("<Enter>", lambda e: self._draw(hover=True))
+        self.bind("<Leave>", lambda e: self._draw())
+        variable.trace_add("write", lambda *_: self._draw())
+
+    def _draw(self, hover=False):
+        self.delete("all")
+        on = bool(self.variable.get())
+        top = 3
+        fill = ACCENT if on else PANEL
+        edge = ACCENT if on else (ACCENT if hover else LINE)
+        _round_rect(self, 1, top, self.BOX, top + self.BOX - 3, 5,
+                    fill=fill, outline=edge)
+        if on:
+            x, y = 5, top + 8
+            self.create_line(x, y, x + 3, y + 4, x + 9, y - 4,
+                             fill="#ffffff", width=2, capstyle="round",
+                             joinstyle="round")
+        self.create_text(self.BOX + 8, top + 7, text=self._text, anchor="w",
+                         fill=INK, font=self._font)
+
+    def _toggle(self, _event=None):
+        self.variable.set(not self.variable.get())
+        self._draw()
+        if self.command:
+            self.command()
+
+
+class ThinScrollbar(tk.Canvas):
+    """
+    A scrollbar with no arrow buttons and no trough.
+
+    Stepper arrows at both ends have not been part of a current interface for
+    fifteen years, and ttk draws them on every platform theme this app can
+    reach. Implements `set` so it drops straight into `yscrollcommand`.
+    """
+
+    WIDTH = 10
+
+    def __init__(self, master, command, background=PANEL, **kw):
+        super().__init__(master, width=self.WIDTH, highlightthickness=0, bd=0,
+                         background=background, **kw)
+        self.command = command
+        self._first, self._last = 0.0, 1.0
+        self._grab = None
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Button-1>", self._press)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", lambda e: setattr(self, "_grab", None))
+        self.bind("<Enter>", lambda e: self._draw(hover=True))
+        self.bind("<Leave>", lambda e: self._draw())
+
+    def set(self, first, last):
+        self._first, self._last = float(first), float(last)
+        self._draw()
+
+    def _draw(self, hover=False):
+        self.delete("all")
+        height = self.winfo_height()
+        if height <= 1 or (self._first <= 0.0 and self._last >= 1.0):
+            return                              # nothing to scroll: show nothing
+        top = self._first * height
+        bottom = max(self._last * height, top + 24)
+        _round_rect(self, 2, top + 2, self.WIDTH - 2, bottom - 2, 4,
+                    fill=(MUTED if hover else "#c9d1da"), outline="")
+
+    def _press(self, event):
+        height = max(self.winfo_height(), 1)
+        top, bottom = self._first * height, self._last * height
+        if top <= event.y <= bottom:
+            self._grab = event.y - top
+        else:                                   # jump to where they clicked
+            self._grab = (bottom - top) / 2
+            self._drag(event)
+
+    def _drag(self, event):
+        if self._grab is None:
+            return
+        height = max(self.winfo_height(), 1)
+        self.command("moveto", max(0.0, min(1.0, (event.y - self._grab) / height)))
+
+
+class Dropdown(tk.Canvas):
+    """
+    A flat dropdown with a drawn chevron and a styled popup list.
+
+    ttk's Combobox arrow is a chunky raised square drawn by the platform
+    theme, and cannot be restyled without replacing the theme element itself.
+    Drawing the closed state and popping a plain window for the open state is
+    less code than fighting it, and looks like software from this decade.
+
+    Keeps the parts of the Combobox API this app uses - `["values"]`,
+    `current(i)`, a text variable, and a <<ComboboxSelected>> event - so
+    nothing else had to change.
+    """
+
+    HEIGHT = 34
+
+    def __init__(self, master, textvariable, command=None, font=None,
+                 background=SIDEBAR, **kw):
+        self.variable = textvariable
+        # A direct callback rather than only a virtual event: Tk delivers
+        # virtual events through the event loop, so a caller cannot rely on
+        # having been told anything by the time `_choose` returns.
+        self.command = command
+        self._values = []
+        self._font = font or ("TkDefaultFont", 11)
+        self._popup = None
+        super().__init__(master, height=self.HEIGHT, highlightthickness=0,
+                         bd=0, background=background, takefocus=1, **kw)
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Button-1>", lambda e: self._open())
+        self.bind("<Return>", lambda e: self._open())
+        self.bind("<Enter>", lambda e: self._draw(hover=True))
+        self.bind("<Leave>", lambda e: self._draw())
+        textvariable.trace_add("write", lambda *_: self._draw())
+
+    # -- closed state -------------------------------------------------------
+    def _draw(self, hover=False):
+        self.delete("all")
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, 8, fill=PANEL,
+                    outline=ACCENT if hover else LINE)
+        measure = tkfont.Font(font=self._font)
+        text = self.variable.get() or "No drives found"
+        room = width - 46
+        while text and measure.measure(text) > room:
+            text = text[:-2]
+        if text != (self.variable.get() or "No drives found"):
+            text += "\u2026"
+        self.create_text(12, self.HEIGHT // 2, text=text, anchor="w",
+                         fill=INK if self.variable.get() else FAINT,
+                         font=self._font)
+        x, y = width - 20, self.HEIGHT // 2 - 2
+        self.create_line(x - 5, y, x, y + 5, x + 5, y, fill=MUTED, width=2,
+                         capstyle="round", joinstyle="round")
+
+    # -- open state ---------------------------------------------------------
+    def _open(self):
+        if self._popup or not self._values:
+            return
+        popup = tk.Toplevel(self)
+        popup.overrideredirect(True)
+        popup.configure(background=LINE)
+        popup.geometry(f"+{self.winfo_rootx()}"
+                       f"+{self.winfo_rooty() + self.HEIGHT + 2}")
+        inner = tk.Frame(popup, background=PANEL)
+        inner.pack(padx=1, pady=1)
+
+        for value in self._values:
+            row = tk.Label(inner, text=value, anchor="w", background=PANEL,
+                           foreground=INK, font=self._font, padx=12, pady=7,
+                           width=max(len(v) for v in self._values))
+            row.pack(fill="x")
+            row.bind("<Enter>", lambda e, r=row: r.configure(
+                background=ACCENT_SOFT))
+            row.bind("<Leave>", lambda e, r=row: r.configure(background=PANEL))
+            row.bind("<Button-1>", lambda e, v=value: self._choose(v))
+
+        self._popup = popup
+        popup.bind("<Escape>", lambda e: self._close())
+        popup.grab_set()
+        popup.bind("<Button-1>", lambda e: None)
+        self.winfo_toplevel().bind("<Button-1>", lambda e: self._close(),
+                                   add="+")
+
+    def _close(self):
+        if self._popup:
+            self._popup.grab_release()
+            self._popup.destroy()
+            self._popup = None
+
+    def _choose(self, value):
+        self.variable.set(value)
+        self._close()
+        self._draw()
+        if self.command:
+            self.command()
+        self.event_generate("<<ComboboxSelected>>", when="now")
+
+    # -- the slice of the Combobox API this app relies on --------------------
+    def current(self, index=None):
+        if index is None:
+            values = list(self._values)
+            return values.index(self.variable.get()) \
+                if self.variable.get() in values else -1
+        if 0 <= index < len(self._values):
+            self.variable.set(self._values[index])
+        return None
+
+    def configure(self, **kw):
+        if "values" in kw:
+            self._values = list(kw.pop("values"))
+            self._draw()
+        if kw:
+            super().configure(**kw)
+
+    config = configure
+
+    def __setitem__(self, key, value):
+        if key == "values":
+            self.configure(values=value)
+        else:
+            super().__setitem__(key, value)
+
+    def __getitem__(self, key):
+        if key == "values":
+            return self._values
+        return super().__getitem__(key)
+
+
 class Segmented(tk.Frame):
     """
     A two-option segmented control, bound to a StringVar.
@@ -385,12 +623,11 @@ class App:
         row += 1
         self.volumes = []
         self.drive_var = tk.StringVar()
-        self.drive_box = ttk.Combobox(rail, textvariable=self.drive_var,
-                                      state="readonly", font=self.font_small)
+        self.drive_box = Dropdown(rail, textvariable=self.drive_var,
+                                  command=self._show_drive_detail,
+                                  font=self.font_small, background=SIDEBAR)
         self.drive_box.grid(row=row, column=0, sticky="we", padx=pad,
                             pady=(6, 2))
-        self.drive_box.bind("<<ComboboxSelected>>",
-                            lambda e: self._show_drive_detail())
         row += 1
         # The device path lives under the box rather than inside it. A rail
         # this narrow truncates a long label without saying so, and the tail
@@ -430,8 +667,9 @@ class App:
         for i, ext in enumerate(sorted(carve.SIGNATURES)):
             var = tk.BooleanVar(value=ext in ("jpg", "png", "pdf"))
             self.type_vars[ext] = var
-            ttk.Checkbutton(self.types_row, text=ext, variable=var).grid(
-                row=1 + i // 3, column=i % 3, sticky="w", padx=(0, 10))
+            CheckBox(self.types_row, ext, var, font=self.font_small,
+                     background=SIDEBAR).grid(
+                row=1 + i // 3, column=i % 3, sticky="w", padx=(0, 8))
         row += 1
 
         # --- destination
@@ -440,9 +678,9 @@ class App:
         row += 1
         self.dest_var = tk.StringVar(
             value=os.path.join(os.path.expanduser("~"), "Recovered"))
-        ttk.Entry(rail, textvariable=self.dest_var,
-                  font=self.font_small).grid(row=row, column=0, sticky="we",
-                                             padx=pad, pady=(6, 6))
+        self._hairline(rail, self.dest_var, self.font_small,
+                       background=SIDEBAR).grid(
+            row=row, column=0, sticky="we", padx=pad, pady=(6, 6))
         row += 1
         PillButton(rail, "Choose folder...", kind="ghost",
                    font=self.font_small, background=SIDEBAR,
@@ -466,6 +704,28 @@ class App:
 
         self._refresh_drives()
         self._toggle_mode()
+
+    def _hairline(self, master, variable, font, background):
+        """
+        An entry with a one-pixel border in our own colour.
+
+        ttk draws entry borders from the platform theme, which on every theme
+        this app can reach means a sunken 3D bevel. A flat frame one pixel
+        larger than the entry gives a hairline instead, and lights up on
+        focus the way a current text field does.
+        """
+        frame = tk.Frame(master, background=LINE, highlightthickness=0)
+        entry = tk.Entry(frame, textvariable=variable, font=font,
+                         relief="flat", background=PANEL, foreground=INK,
+                         insertbackground=INK, borderwidth=0,
+                         highlightthickness=0)
+        entry.pack(fill="both", expand=True, padx=1, pady=1, ipady=6, ipadx=8)
+        entry.bind("<FocusIn>", lambda e: frame.configure(background=ACCENT),
+                   add="+")
+        entry.bind("<FocusOut>", lambda e: frame.configure(background=LINE),
+                   add="+")
+        frame.entry = entry
+        return frame
 
     def _build_main(self):
         main = tk.Frame(self.root, background=BG)
@@ -493,9 +753,11 @@ class App:
         bar.grid(row=1, column=0, sticky="we", padx=26, pady=(14, 10))
         bar.columnconfigure(0, weight=1)
         self.search_var = tk.StringVar()
-        entry = ttk.Entry(bar, textvariable=self.search_var,
-                          font=self.font_body, foreground=FAINT)
-        entry.grid(row=0, column=0, sticky="we")
+        wrap = self._hairline(bar, self.search_var, self.font_body,
+                              background=BG)
+        wrap.grid(row=0, column=0, sticky="we")
+        entry = wrap.entry
+        entry.configure(foreground=FAINT)
         entry.bind("<Escape>", lambda e: self.search_var.set(""))
         # Tk has no placeholder, so it is one written in and taken back out
         # again. Kept in a variable the filter knows to ignore.
@@ -519,10 +781,9 @@ class App:
         entry.bind("<FocusOut>", focus_out)
         self.search_entry = entry
         self.only_good = tk.BooleanVar(value=False)
-        ttk.Checkbutton(bar, text="Only likely recoverable",
-                        style="Main.TCheckbutton", variable=self.only_good,
-                        command=self._apply_filter).grid(row=0, column=1,
-                                                         padx=(14, 0))
+        CheckBox(bar, "Only likely recoverable", self.only_good,
+                 command=self._apply_filter, font=self.font_small,
+                 background=BG).grid(row=0, column=1, padx=(14, 0))
         PillButton(bar, "Select all", kind="ghost", font=self.font_small,
                    command=self._select_all).grid(row=0, column=2,
                                                   padx=(10, 0))
@@ -549,8 +810,8 @@ class App:
                              anchor="e" if c in ("size", "chance") else "w")
         self.tree.grid(row=0, column=0, sticky="nsew")
 
-        vs = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
-        vs.grid(row=0, column=1, sticky="ns")
+        vs = ThinScrollbar(table, command=self.tree.yview, background=PANEL)
+        vs.grid(row=0, column=1, sticky="ns", padx=(0, 3), pady=3)
         self.tree.configure(yscrollcommand=vs.set)
 
         # Colouring a whole row in red or green shouts. A faint wash carries
