@@ -520,12 +520,17 @@ class Field(tk.Canvas):
         return handler
 
     def _draw(self):
-        self.delete("all")
         width = self.winfo_width()
         if width <= 1:
             return
+        # Only the border, by tag. `delete("all")` takes the embedded Entry
+        # with it - a window is a canvas item like any other - and the field
+        # redraws as an empty box with the text still sitting in the variable.
+        self.delete("box")
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
-                    fill=PANEL, outline=ACCENT if self._focused else LINE)
+                    fill=PANEL, outline=ACCENT if self._focused else LINE,
+                    tags="box")
+        self.tag_lower("box")
         self.itemconfigure(self._slot, width=max(width - FIELD_PAD * 2, 10))
         self.coords(self._slot, FIELD_PAD, self.HEIGHT // 2)
 

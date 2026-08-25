@@ -396,6 +396,51 @@ class LayoutTests(NoDialogs, unittest.TestCase):
         self.assertEqual(self.app.recover_btn.winfo_height(),
                          appmod.CONTROL_H)
 
+    def test_the_fields_show_what_is_in_them(self):
+        """
+        The bug this covers: the field redrew its border with
+        `delete("all")`, which deleted the Entry sitting inside it as well -
+        a canvas window is an item like any other. The recovery folder was
+        still in the variable and still used by the scan, but the box on
+        screen was blank, so it read as "no folder chosen".
+        """
+        self.show()
+        self.assertTrue(self.app.search_entry.winfo_ismapped(),
+                        "the search field lost its entry")
+        dest_field = self.app.dest_var
+        entry = self._dest_entry()
+        self.assertTrue(entry.winfo_ismapped(),
+                        "the recovery folder field lost its entry")
+        self.assertEqual(entry.get(), dest_field.get())
+        self.assertTrue(dest_field.get(), "there should be a default folder")
+
+    def test_a_field_keeps_its_entry_through_a_resize(self):
+        self.show()
+        entry = self._dest_entry()
+        self.show("1100x680")
+        self.root.update()
+        self.assertTrue(entry.winfo_ismapped())
+        self.assertEqual(entry.get(), self.app.dest_var.get())
+
+    def _dest_entry(self):
+        """The Entry inside the RECOVER TO field."""
+        for field in self._fields():
+            if field.entry.get() == self.app.dest_var.get():
+                return field.entry
+        self.fail("no field is showing the recovery folder")
+
+    def _fields(self):
+        found = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, appmod.Field):
+                    found.append(child)
+                walk(child)
+
+        walk(self.root)
+        return found
+
     def test_the_scan_button_survives_the_smallest_window(self):
         """
         Deep-scan mode adds the file-type list to the rail, which makes it
