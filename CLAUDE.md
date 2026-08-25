@@ -134,6 +134,11 @@ if any module other than diskio.py starts opening devices.
   Never imply otherwise in UI text or docs.
 - Compressed and encrypted NTFS files are not decoded.
 - Carved formats without a footer (ZIP, DOCX, MP4) include trailing junk.
+- A signature is not proof. Three bytes of JPEG header turn up in ordinary
+  data constantly, so every carved candidate is checked against
+  `verify.plausible` before being listed. A JPEG needs a frame header and a
+  start-of-scan, not just the right two ends - listing lumps that have
+  neither is how the deep scan produced "photos" that opened in nothing.
 - Deep scan cannot know how long a file is when its format has no end
   marker and states no length (zip and its descendants). Those are cut at
   `carve.UNKNOWN_LENGTH_CAP` and carry trailing junk, which `verify.py` can

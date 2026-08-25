@@ -20,13 +20,13 @@ import zlib
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import verify
-from tests.support import noise
+from tests.support import noise, sample_jpeg
 
 
 # --- sample builders -------------------------------------------------------
 
 def jpeg(payload=b"J" * 2000):
-    return b"\xFF\xD8\xFF\xE0" + payload + b"\xFF\xD9"
+    return sample_jpeg(payload)
 
 
 def png(payload=b"P" * 500):
@@ -119,9 +119,20 @@ class TrailingDataTests(unittest.TestCase):
 
 class TruncatedFilesTests(unittest.TestCase):
     def test_a_jpeg_with_no_end_marker(self):
-        report = verify.inspect_bytes(b"\xFF\xD8\xFF\xE0" + b"J" * 5000, "jpg")
+        report = verify.inspect_bytes(jpeg()[:-2], "jpg")
         self.assertEqual(report.verdict, verify.TRUNCATED)
         self.assertFalse(report.repairable)
+
+    def test_a_jpeg_shaped_lump_with_no_picture_in_it(self):
+        """
+        The real false positive: right first bytes, right last bytes, no
+        frame header, no image. Three of these were recovered and reported
+        as intact before the walker looked past the two ends.
+        """
+        report = verify.inspect_bytes(
+            b"\xFF\xD8\xFF" + noise(3000, seed=41) + b"\xFF\xD9", "jpg")
+        self.assertEqual(report.verdict, verify.WRONG_FORMAT)
+        self.assertIn("no picture", report.detail)
 
     def test_a_zip_with_no_index(self):
         report = verify.inspect_bytes(b"PK\x03\x04" + b"Z" * 5000, "zip")

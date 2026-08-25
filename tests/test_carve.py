@@ -13,11 +13,11 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import carve
-from tests.support import ImageTestCase, md5, noise
+from tests.support import ImageTestCase, md5, noise, sample_jpeg
 
 
 def jpeg(payload):
-    return b"\xFF\xD8\xFF" + payload + b"\xFF\xD9"
+    return sample_jpeg(payload)
 
 
 def png(payload):
@@ -299,3 +299,65 @@ class CarveLengthTests(ImageTestCase):
         maximum.
         """
         self.assertLessEqual(carve.UNKNOWN_LENGTH_CAP, 128 * 1024 * 1024)
+
+
+class CarveFalsePositiveTests(ImageTestCase):
+    """
+    A three-byte JPEG header turns up in ordinary data constantly, and an end
+    marker turns up somewhere after it soon enough. Three such lumps were
+    carved from a real card, listed as files, recovered, and would not open in
+    anything - they had the right first and last bytes and no picture at all.
+    """
+
+    def setUp(self):
+        import random
+        rng = random.Random(7)
+        self.real = jpeg(b"J" * 4000)
+        # A convincing fake: right header, an end marker later, nothing between.
+        fake = b"\xFF\xD8\xFF" + bytes(rng.randrange(1, 255)
+                                       for _ in range(4000)) + b"\xFF\xD9"
+        self.use_image(noise(1000, seed=1) + fake + noise(1000, seed=2)
+                       + self.real + noise(1000, seed=3))
+
+    def test_lumps_with_no_picture_in_them_are_not_listed(self):
+        handle = self.disk()
+        found = list(carve.scan(handle, ["jpg"]))
+        self.assertEqual(len(found), 1,
+                         "a JPEG-shaped lump with no image was listed as a file")
+        self.assertEqual(md5(carve.read_file(handle, found[0])), md5(self.real))
+
+
+class CarveNamingTests(ImageTestCase):
+    """
+    Several formats share the `PK` signature. A plain zip carved while looking
+    for documents came out named .docx, and would not open in Word however
+    perfect the bytes were.
+    """
+
+    def setUp(self):
+        import io
+        import zipfile
+        plain = io.BytesIO()
+        with zipfile.ZipFile(plain, "w") as z:
+            z.writestr("notes.txt", "hello")
+        self.plain = plain.getvalue()
+
+        office = io.BytesIO()
+        with zipfile.ZipFile(office, "w") as z:
+            z.writestr("[Content_Types].xml", "<Types/>")
+            z.writestr("word/document.xml", "<w/>")
+        self.office = office.getvalue()
+
+    def test_a_plain_archive_is_named_zip_not_docx(self):
+        self.use_image(noise(500, seed=4) + self.plain + noise(500, seed=5))
+        found = list(carve.scan(self.disk(), ["docx"]))
+        self.assertTrue(found)
+        self.assertTrue(found[0].name.endswith(".zip"),
+                        f"a plain zip was named {found[0].name}")
+
+    def test_a_real_word_document_keeps_its_name(self):
+        self.use_image(noise(500, seed=6) + self.office + noise(500, seed=7))
+        found = list(carve.scan(self.disk(), ["docx"]))
+        self.assertTrue(found)
+        self.assertTrue(found[0].name.endswith(".docx"),
+                        f"a Word document was named {found[0].name}")

@@ -82,9 +82,69 @@ class Report:
 # Per-format walkers. Each returns (verdict, detail, true_length or None).
 # ---------------------------------------------------------------------------
 
+# JPEG markers that introduce a frame - the segment carrying the image's
+# actual dimensions. A file without one is not a picture, whatever its first
+# and last bytes say.
+_SOF_MARKERS = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+_STANDALONE = {0x01, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8}
+
+
 def _check_jpeg(data):
+    """
+    Walk the marker segments, not just the two ends.
+
+    Checking only for the start and end markers was not enough, and this is
+    exactly how it failed: a deep scan turned up three "photos" that began
+    with FFD8FF, ended with FFD9, and contained no image at all - the header
+    bytes happened to occur inside other data and an end marker happened to
+    turn up later. They passed as intact and would not open in anything.
+
+    A real JPEG carries a frame header giving its dimensions, and a
+    start-of-scan marker introducing the compressed image. Both must be here.
+    """
     if data[:3] != b"\xFF\xD8\xFF":
         return WRONG_FORMAT, "This does not start like a JPEG.", None
+
+    pos = 2
+    saw_frame = saw_scan = False
+    while pos < len(data) - 1:
+        if data[pos] != 0xFF:
+            return (WRONG_FORMAT,
+                    "This is not a JPEG - the file has the right first and "
+                    "last bytes but no picture inside it.", None)
+        while pos < len(data) and data[pos] == 0xFF:
+            pos += 1                            # fill bytes are allowed
+        if pos >= len(data):
+            break
+        marker = data[pos]
+        pos += 1
+
+        if marker in _STANDALONE:
+            continue
+        if marker == 0xD9:                      # end of image
+            break
+        if pos + 2 > len(data):
+            return TRUNCATED, "The end of this image is missing.", None
+        length = struct.unpack_from(">H", data, pos)[0]
+        if length < 2:
+            return (WRONG_FORMAT,
+                    "This is not a JPEG - its internal markers do not make "
+                    "sense.", None)
+        if marker in _SOF_MARKERS:
+            saw_frame = True
+        if marker == 0xDA:                      # start of scan
+            saw_scan = True
+            break
+        pos += length
+
+    if not saw_frame:
+        return (WRONG_FORMAT,
+                "This is not a JPEG - the file has the right first and last "
+                "bytes but carries no picture.", None)
+    if not saw_scan:
+        return TRUNCATED, "This image has no picture data in it.", None
+
     end = data.rfind(b"\xFF\xD9")
     if end == -1:
         return (TRUNCATED,
@@ -346,6 +406,18 @@ def inspect_bytes(data, extension):
         # A validator falling over is not a verdict about the file.
         return Report(UNKNOWN, "", kind, len(data))
     return Report(verdict, detail, kind, len(data), true_length)
+
+
+def plausible(head, extension):
+    """
+    Could the bytes at the start of this file really be one?
+
+    Used by the deep scan to throw out false hits before they are ever
+    listed. Only positive evidence counts against a file: a walker that runs
+    out of data has learned nothing, and says so.
+    """
+    verdict = inspect_bytes(head, extension).verdict
+    return verdict not in (WRONG_FORMAT, DAMAGED)
 
 
 def inspect_file(path, extension=None):

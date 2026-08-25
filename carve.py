@@ -11,7 +11,14 @@ the filesystem - so results come out as recovered_00001.jpg and similar.
 Read-only: it uses ReadOnlyDisk, which cannot write to the source.
 """
 
+import verify
+
 CHUNK = 8 * 1024 * 1024
+
+# How much of a candidate we look at before deciding it is worth listing.
+# The parts that prove a file real - a JPEG's frame header, a PNG's IHDR -
+# live near the front, so this does not need to be large.
+PLAUSIBLE_PROBE = 16 * 1024
 
 # ext: (header, footer or None, max size)
 SIGNATURES = {
@@ -169,6 +176,35 @@ def _measure(disk, start, ext, footer, max_size):
     return min(max_size, UNKNOWN_LENGTH_CAP)
 
 
+# Several formats share one signature. `PK\x03\x04` is a zip, and a .docx is
+# a zip too - so a plain archive carved while looking for documents came out
+# named .docx and would not open in Word, despite the data being perfect.
+_ZIP_FAMILY = {"zip", "docx", "xlsx", "pptx", "odt"}
+
+
+def _real_extension(ext, head):
+    """
+    Refine the extension using what is actually inside the file.
+
+    Only ever narrows a guess we already had, and only on evidence: an Office
+    document names [Content_Types].xml near the front, an OpenDocument names
+    its mimetype. Anything else keeps the honest, general name.
+    """
+    if ext not in _ZIP_FAMILY:
+        return ext
+    if b"[Content_Types].xml" in head:
+        if b"word/" in head:
+            return "docx"
+        if b"xl/" in head:
+            return "xlsx"
+        if b"ppt/" in head:
+            return "pptx"
+        return "docx"
+    if head[30:38] == b"mimetype":
+        return "odt"
+    return "zip"
+
+
 def read_file(disk, found):
     """Fetch a carved file's bytes. Read-only, like everything else here."""
     return disk.read(found.offset, found.size)
@@ -207,10 +243,13 @@ def scan(disk, types, progress=None, should_stop=None, limit_bytes=None):
                     continue
                 size = _measure(disk, start, ext, footer, max_size)
                 if size and size > 512:
-                    counters[ext] += 1
-                    yield CarvedFile(
-                        f"recovered_{ext}_{counters[ext]:05d}.{ext}",
-                        ext, start, size)
+                    head = disk.read(start, min(size, PLAUSIBLE_PROBE))
+                    if verify.plausible(head, ext):
+                        real = _real_extension(ext, head)
+                        counters[ext] += 1
+                        yield CarvedFile(
+                            f"recovered_{ext}_{counters[ext]:05d}.{real}",
+                            real, start, size)
                 pos = idx + 1
 
         carry = buf[-max_sig:] if len(buf) >= max_sig else buf

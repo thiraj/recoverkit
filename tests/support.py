@@ -10,6 +10,7 @@ invariant is checked continuously rather than in one dedicated test.
 import hashlib
 import os
 import random
+import struct
 import sys
 import tempfile
 import unittest
@@ -37,6 +38,32 @@ def noise(length, seed=0):
     if length <= len(block):
         return block[:length]
     return (block * (length // len(block) + 1))[:length]
+
+
+def sample_jpeg(payload=b"\x11" * 2000, width=8, height=8):
+    """
+    A structurally real JPEG: start marker, frame header carrying the
+    dimensions, start-of-scan, image data, end marker.
+
+    Fixtures used to be \xFF\xD8\xFF + filler + \xFF\xD9, which has the right
+    two ends and no picture in between - precisely the shape of the false
+    positives a deep scan produces, and precisely what a fixture must not be
+    if it is meant to stand in for a real photograph.
+    """
+    out = bytearray(b"\xFF\xD8")
+    out += (b"\xFF\xE0" + struct.pack(">H", 16)
+            + b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00")
+    # Frame header: length, precision, height, width, component count, then
+    # one component. The component count is easy to leave out and the segment
+    # then declares itself a byte longer than it is - which the checker spots,
+    # correctly, as a file that is not a JPEG.
+    out += (b"\xFF\xC0" + struct.pack(">H", 11) + bytes([8])
+            + struct.pack(">HH", height, width)
+            + bytes([1]) + bytes([1, 0x11, 0]))
+    out += b"\xFF\xDA" + struct.pack(">H", 8) + bytes([1, 1, 0, 0, 63, 0])
+    out += payload.replace(b"\xFF", b"\xFE")     # no stray markers in the data
+    out += b"\xFF\xD9"
+    return bytes(out)
 
 
 def md5(data):
