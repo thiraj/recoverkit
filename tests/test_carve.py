@@ -13,6 +13,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import carve
+import signatures
 from tests.support import ImageTestCase, md5, noise, sample_jpeg
 
 
@@ -361,3 +362,84 @@ class CarveNamingTests(ImageTestCase):
         self.assertTrue(found)
         self.assertTrue(found[0].name.endswith(".docx"),
                         f"a Word document was named {found[0].name}")
+
+
+def photo_with_thumbnail(payload=b"\x33" * 200_000, thumb_size=9000):
+    """
+    A photograph as cameras actually write them: EXIF metadata carrying a
+    complete little JPEG thumbnail, which has its own end marker.
+    """
+    import struct
+    from tests.support import sample_jpeg
+    thumb = sample_jpeg(b"\x22" * thumb_size, width=160, height=120)
+    app1 = b"Exif\x00\x00" + thumb
+    return (b"\xFF\xD8" + b"\xFF\xE1" + struct.pack(">H", len(app1) + 2)
+            + app1 + sample_jpeg(payload)[2:])
+
+
+class CarveThumbnailTests(ImageTestCase):
+    """
+    The failure a real deep scan produced: files that opened perfectly and
+    were the wrong picture.
+
+    Hunting forward for the first end marker finds the *thumbnail's*, because
+    every photograph carries one inside its EXIF. The carve stops there, and
+    what comes out is four percent of the photograph - a valid JPEG, so every
+    check passed it, at a confident score, and it was the 160x120 preview.
+    """
+
+    def setUp(self):
+        self.photo = photo_with_thumbnail()
+        self.other = jpeg(b"\x44" * 50_000)
+        self.use_image(noise(2000, seed=1) + self.photo + noise(2000, seed=2)
+                       + self.other + noise(2000, seed=3))
+
+    def test_the_whole_photograph_is_carved_not_its_thumbnail(self):
+        handle = self.disk()
+        found = list(carve.scan(handle, ["jpg"]))
+        sizes = [f.size for f in found]
+        self.assertIn(len(self.photo), sizes,
+                      f"the photograph was not carved whole; got {sizes}")
+
+    def test_it_is_byte_identical(self):
+        handle = self.disk()
+        found = list(carve.scan(handle, ["jpg"]))
+        recovered = {md5(carve.read_file(handle, f)) for f in found}
+        self.assertIn(md5(self.photo), recovered)
+        self.assertIn(md5(self.other), recovered)
+
+    def test_the_thumbnail_is_not_offered_as_a_second_file(self):
+        """
+        It is a real JPEG, so it cannot be rejected as junk - but it is part
+        of a file already carved, and two files per photograph is noise.
+        """
+        found = list(carve.scan(self.disk(), ["jpg"]))
+        self.assertEqual(len(found), 2,
+                         f"expected the two photographs, got {len(found)}")
+
+
+class CarveVerdictTests(ImageTestCase):
+    """
+    Carved results used to carry a fixed score - 75 for anything with an end
+    marker - and a hardcoded "looks intact". Both were invented, so a file
+    cut in the wrong place scored exactly the same as a perfect one.
+    """
+
+    def setUp(self):
+        self.good = jpeg(b"J" * 30_000)
+        self.use_image(noise(1000, seed=8) + self.good + noise(1000, seed=9))
+
+    def test_a_whole_file_scores_on_evidence(self):
+        found = list(carve.scan(self.disk(), ["jpg"]))
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].content_check, signatures.MATCH)
+        self.assertGreaterEqual(found[0].chance, 80)
+
+    def test_nothing_carries_a_score_it_did_not_earn(self):
+        """Every listed file's score must come from reading it back."""
+        for found in carve.scan(self.disk(), ["jpg", "png", "pdf", "zip"]):
+            self.assertIn(found.content_check,
+                          (signatures.MATCH, signatures.MISMATCH,
+                           signatures.UNKNOWN))
+            self.assertLessEqual(found.chance, 90,
+                                 "carving cannot know a file is certain")

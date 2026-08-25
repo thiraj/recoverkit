@@ -408,6 +408,51 @@ def inspect_bytes(data, extension):
     return Report(verdict, detail, kind, len(data), true_length)
 
 
+def payload_offset(head, extension):
+    """
+    Where a format's real content starts, past its metadata.
+
+    This exists because of one specific disaster. Every photograph carries a
+    small complete JPEG inside its EXIF metadata - the thumbnail your file
+    manager shows - and that thumbnail has its own end marker. A carver
+    hunting forward for the first end marker finds the thumbnail's, cuts
+    there, and hands back four percent of the photograph: a file that opens
+    perfectly and is the wrong picture.
+
+    Returns None when it cannot tell, and the caller should then search from
+    the beginning as before.
+    """
+    kind = (extension or "").lower().lstrip(".")
+    if kind not in ("jpg", "jpeg"):
+        return None
+    if head[:3] != b"\xFF\xD8\xFF":
+        return None
+
+    pos = 2
+    while pos < len(head) - 1:
+        if head[pos] != 0xFF:
+            return None
+        while pos < len(head) and head[pos] == 0xFF:
+            pos += 1
+        if pos >= len(head):
+            return None
+        marker = head[pos]
+        pos += 1
+        if marker in _STANDALONE:
+            continue
+        if marker == 0xD9:
+            return None                     # ended before any image data
+        if pos + 2 > len(head):
+            return None
+        length = struct.unpack_from(">H", head, pos)[0]
+        if length < 2:
+            return None
+        if marker == 0xDA:                  # start of scan: content follows
+            return pos + length
+        pos += length
+    return None
+
+
 def plausible(head, extension):
     """
     Could the bytes at the start of this file really be one?

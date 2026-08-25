@@ -154,8 +154,16 @@ if any module other than diskio.py starts opening devices.
   trim afterwards.
 - Carving cannot tell whether a file is whole, and a fragmented file carves
   into nonsense after its first piece however clean the header looked. Carved
-  results are therefore never scored above 75, and never at 100. Don't
-  "improve" that number.
+  results are never scored above 90 and never at 100, and every score comes
+  from reading the extracted bytes back and walking the format's structure -
+  never from the signature that found it. Don't replace that with a constant.
+- Never hunt for a format's end marker from byte zero. Every photograph
+  carries a complete JPEG in its EXIF - the thumbnail - with its own end
+  marker, and a carve that stops there returns four percent of the picture:
+  a file that opens perfectly and is the wrong image. `verify.payload_offset`
+  says where the real content starts.
+- A signature found inside a file already carved belongs to that file. Emit
+  one result, not a photograph and its thumbnail.
 
 ## Testing
 
