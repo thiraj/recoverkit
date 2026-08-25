@@ -242,6 +242,23 @@ Two things about these tests are not obvious and cost real debugging time:
   damaged, and saying so is the feature. The tests assert that every file
   scored 100% comes back byte-identical, and that at least one gets there.
 
+## Where things stand
+
+Undelete works on NTFS, exFAT and FAT32. Deep scan and `verify.py` are in.
+CI runs the suite on Windows, macOS and Linux on every push, plus the
+real-filesystem tests. Phase 1 of the Tauri port - `service.py`, the JSON
+line protocol - is done; phase 2 (elevation) has not started. See
+`PORTING.md`.
+
+Agreed next steps, in order:
+
+1. **A preview pane.** For photographs this is the difference between
+   recovering eight files and recovering three thousand and sorting them by
+   hand. It is the largest remaining usability gap.
+2. **Disk imaging.** `SAFETY.md` tells users to clone a failing drive with
+   `ddrescue` before scanning it - good advice the tool cannot act on.
+3. **Phase 2 of the port.**
+
 ## Roadmap
 
 - Port the GUI to Tauri (Rust + web frontend) for a modern look. Keep the
