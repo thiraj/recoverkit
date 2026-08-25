@@ -316,6 +316,117 @@ class StartupTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
+class LayoutTests(NoDialogs, unittest.TestCase):
+    """
+    The window's alignment, asserted in pixels.
+
+    Spacing is the first thing to drift and the last thing anyone notices in
+    a diff: a control given its own width, a button that keeps the size of
+    its own label, a gutter typed as 26 where everything else says 24. These
+    measure the finished window instead of trusting the source.
+
+    They need the window on the screen - an unmapped Tk window reports every
+    widget as one pixel by one - so unlike the rest of the suite these show
+    it.
+    """
+
+    def setUp(self):
+        self.silence_dialogs()
+        self.root = tk.Tk()
+        self.addCleanup(self.root.destroy)
+        self.app = appmod.App(self.root)
+
+    def show(self, size="1180x720"):
+        self.root.geometry(size + "+60+60")
+        self.root.deiconify()
+        self.root.update()
+        self.root.update_idletasks()
+
+    def rect(self, widget):
+        return (widget.winfo_rootx() - self.root.winfo_rootx(),
+                widget.winfo_rooty() - self.root.winfo_rooty(),
+                widget.winfo_width(), widget.winfo_height())
+
+    def rail_controls(self):
+        """Everything in the settings rail you can click or type into."""
+        found = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, (appmod.PillButton, appmod.Dropdown,
+                                      appmod.Field)):
+                    found.append(child)
+                walk(child)
+
+        walk(self.app.drive_box.master.master)      # the scrolling body
+        found.extend([self.app.scan_btn, self.app.stop_btn])
+        return found
+
+    def test_every_control_in_the_rail_is_the_same_size(self):
+        self.show()
+        sizes = {(w.winfo_width(), w.winfo_height())
+                 for w in self.rail_controls()}
+        self.assertEqual(len(sizes), 1,
+                         f"the rail has controls of {len(sizes)} sizes: "
+                         f"{sorted(sizes)}")
+        self.assertEqual(sizes.pop()[1], appmod.CONTROL_H)
+
+    def test_every_control_in_the_rail_starts_at_the_same_edge(self):
+        self.show()
+        left = {w.winfo_rootx() for w in self.rail_controls()}
+        self.assertEqual(len(left), 1, "the rail is not flush down its left")
+
+    def test_the_buttons_over_the_table_match_and_line_up_with_it(self):
+        """
+        Both are the same size, and their right edge is the table's right
+        edge - the one vertical line the eye follows down that side.
+        """
+        self.show()
+        recover = self.rect(self.app.recover_btn)
+        select = self.rect(self.app.select_all_btn)
+        table = self.rect(self.app.tree.master)
+        self.assertEqual(recover[2:], select[2:])
+        self.assertEqual(recover[0], select[0])
+        self.assertEqual(recover[0] + recover[2], table[0] + table[2])
+
+    def test_the_search_field_is_a_button_height_tall(self):
+        self.show()
+        self.assertEqual(self.app.search_entry.master.winfo_height(),
+                         appmod.CONTROL_H)
+        self.assertEqual(self.app.recover_btn.winfo_height(),
+                         appmod.CONTROL_H)
+
+    def test_the_scan_button_survives_the_smallest_window(self):
+        """
+        Deep-scan mode adds the file-type list to the rail, which makes it
+        taller than the window. The button that starts the scan is the last
+        thing that may be pushed off the bottom, so the settings scroll and
+        it does not.
+        """
+        self.app.mode_var.set("carve")
+        self.app._toggle_mode()
+        self.show("1000x600")
+        _, top, _, height = self.rect(self.app.scan_btn)
+        self.assertLessEqual(top + height, 600,
+                             "Start scan is off the bottom of the window")
+        _, top, _, height = self.rect(self.app.stop_btn)
+        self.assertLessEqual(top + height, 600)
+        first, last = self.app._rail_view.yview()
+        self.assertLess(last - first, 1.0, "the rail should be scrolling")
+
+    def test_the_rail_scrolls_under_the_pointer_anywhere_in_it(self):
+        """Tk delivers a wheel event to one widget, not to its parents."""
+        self.app.mode_var.set("carve")
+        self.app._toggle_mode()
+        self.show("1000x600")
+        self.assertTrue(self.app.drive_box.bind("<MouseWheel>"))
+        self.assertTrue(self.app.scan_btn.bind("<MouseWheel>"))
+        before = self.app._rail_view.yview()[0]
+        self.app._rail_view.yview_scroll(3, "units")
+        self.root.update()
+        self.assertGreater(self.app._rail_view.yview()[0], before)
+
+
 class DrawnWidgetTests(unittest.TestCase):
     """
     The window uses drawn replacements for the ttk widgets whose look comes

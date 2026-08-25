@@ -48,6 +48,17 @@ WASH_WARN = "#fff8ec"   # a hint of caution, not a warning label
 WASH_BAD = "#fdf1f0"
 DISABLED = "#c3ccd8"
 
+# Metrics. Every control in the window is built from these four numbers, and
+# that is the whole trick to a window looking designed rather than assembled:
+# one height for anything you can click or type into, one corner radius, one
+# gutter, one rail width. Nothing gets to pick its own.
+CONTROL_H = 36          # buttons, dropdown, text fields - all identical
+RADIUS = 10             # corner radius on every rounded thing
+GUTTER = 24             # the margin the whole layout is aligned to
+RAIL_W = 292            # the settings rail
+FIELD_PAD = 12          # text inset inside a field, so text clears the curve
+ACTION_W = 168          # the two buttons over the results table, matched
+
 
 def _first_font(root, candidates, size, weight="normal"):
     """
@@ -107,8 +118,9 @@ class PillButton(tk.Canvas):
     treat it exactly like a ttk.Button.
     """
 
-    HEIGHT = 34
-    RADIUS = 8
+    HEIGHT = CONTROL_H
+    RADIUS = RADIUS
+    MIN_WIDTH = 112         # so a two-word button is never a stub
 
     def __init__(self, master, text, command=None, kind="primary",
                  width=None, font=None, **kw):
@@ -119,7 +131,8 @@ class PillButton(tk.Canvas):
         self._font = font or ("TkDefaultFont", 12)
 
         measure = tkfont.Font(font=self._font)
-        self._width = width or measure.measure(text) + 34
+        self._width = width or max(measure.measure(text) + 40,
+                                   self.MIN_WIDTH)
         background = kw.pop("background", None) or (
             SIDEBAR if kind == "sidebar" else BG)
 
@@ -127,6 +140,11 @@ class PillButton(tk.Canvas):
                          highlightthickness=0, bd=0, background=background,
                          cursor="arrow", takefocus=1, **kw)
         self._draw()
+        # Redrawn at whatever width the layout actually gives it. Without
+        # this a button stretched by `sticky="we"` painted its pill at the
+        # width its own label needed and left a gap to the cell edge, which
+        # is what made a column of buttons look ragged.
+        self.bind("<Configure>", lambda e: self._draw())
         self.bind("<Button-1>", self._press)
         self.bind("<Enter>", lambda e: self._draw(hover=True))
         self.bind("<Leave>", lambda e: self._draw())
@@ -153,9 +171,10 @@ class PillButton(tk.Canvas):
     def _draw(self, hover=False):
         self.delete("all")
         fill, ink, outline = self._colours(hover)
-        _round_rect(self, 1, 1, self._width - 1, self.HEIGHT - 1, self.RADIUS,
+        width = self.winfo_width() if self.winfo_width() > 1 else self._width
+        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
                     fill=fill, outline=outline)
-        self.create_text(self._width // 2, self.HEIGHT // 2, text=self._text,
+        self.create_text(width // 2, self.HEIGHT // 2, text=self._text,
                          fill=ink, font=self._font)
 
     # -- behaviour ----------------------------------------------------------
@@ -199,7 +218,7 @@ class CheckBox(tk.Canvas):
     looks like.
     """
 
-    BOX = 17
+    BOX = 18
 
     def __init__(self, master, text, variable, command=None, font=None,
                  background=SIDEBAR, **kw):
@@ -207,8 +226,8 @@ class CheckBox(tk.Canvas):
         self.command = command
         self._font = font or ("TkDefaultFont", 11)
         measure = tkfont.Font(font=self._font)
-        width = self.BOX + 8 + measure.measure(text) + 4
-        super().__init__(master, width=width, height=self.BOX + 6,
+        width = self.BOX + 10 + measure.measure(text) + 4
+        super().__init__(master, width=width, height=self.BOX + 8,
                          highlightthickness=0, bd=0, background=background,
                          takefocus=1, **kw)
         self._text = text
@@ -222,17 +241,17 @@ class CheckBox(tk.Canvas):
     def _draw(self, hover=False):
         self.delete("all")
         on = bool(self.variable.get())
-        top = 3
+        top = 4
         fill = ACCENT if on else PANEL
         edge = ACCENT if on else (ACCENT if hover else LINE)
-        _round_rect(self, 1, top, self.BOX, top + self.BOX - 3, 5,
+        _round_rect(self, 1, top, self.BOX, top + self.BOX - 1, 6,
                     fill=fill, outline=edge)
         if on:
-            x, y = 5, top + 8
-            self.create_line(x, y, x + 3, y + 4, x + 9, y - 4,
+            x, y = 5, top + 9
+            self.create_line(x, y, x + 3, y + 4, x + 9, y - 5,
                              fill="#ffffff", width=2, capstyle="round",
                              joinstyle="round")
-        self.create_text(self.BOX + 8, top + 7, text=self._text, anchor="w",
+        self.create_text(self.BOX + 10, top + 8, text=self._text, anchor="w",
                          fill=INK, font=self._font)
 
     def _toggle(self, _event=None):
@@ -310,7 +329,8 @@ class Dropdown(tk.Canvas):
     nothing else had to change.
     """
 
-    HEIGHT = 34
+    HEIGHT = CONTROL_H
+    RADIUS = RADIUS
 
     def __init__(self, master, textvariable, command=None, font=None,
                  background=SIDEBAR, **kw):
@@ -347,21 +367,21 @@ class Dropdown(tk.Canvas):
         width = self.winfo_width()
         if width <= 1:
             return
-        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, 8, fill=PANEL,
-                    outline=ACCENT if hover else LINE)
+        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
+                    fill=PANEL, outline=ACCENT if hover else LINE)
         measure = tkfont.Font(font=self._font)
         text = self.variable.get() or "No drives found"
-        room = width - 46
+        room = width - 48
         while text and measure.measure(text) > room:
             text = text[:-2]
         if text != (self.variable.get() or "No drives found"):
             text += "\u2026"
-        self.create_text(12, self.HEIGHT // 2, text=text, anchor="w",
+        self.create_text(FIELD_PAD, self.HEIGHT // 2, text=text, anchor="w",
                          fill=INK if self.variable.get() else FAINT,
                          font=self._font)
-        x, y = width - 20, self.HEIGHT // 2 - 2
-        self.create_line(x - 5, y, x, y + 5, x + 5, y, fill=MUTED, width=2,
-                         capstyle="round", joinstyle="round")
+        x, y = width - 19, self.HEIGHT // 2 - 2
+        self.create_line(x - 4, y, x, y + 4, x + 4, y, fill=MUTED,
+                         width=1.6, capstyle="round", joinstyle="round")
 
     # -- open state ---------------------------------------------------------
     def _open(self):
@@ -370,21 +390,29 @@ class Dropdown(tk.Canvas):
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
         popup.configure(background=LINE)
-        popup.geometry(f"+{self.winfo_rootx()}"
-                       f"+{self.winfo_rooty() + self.HEIGHT + 2}")
+        # As wide as the box it drops from, so the list reads as the box
+        # opening rather than as a separate window landing on top of it.
+        popup.geometry(f"{max(self.winfo_width(), 160)}x1"
+                       f"+{self.winfo_rootx()}"
+                       f"+{self.winfo_rooty() + self.HEIGHT + 4}")
         inner = tk.Frame(popup, background=PANEL)
-        inner.pack(padx=1, pady=1)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
 
+        chosen = self.variable.get()
         for value in self._values:
-            row = tk.Label(inner, text=value, anchor="w", background=PANEL,
-                           foreground=INK, font=self._font, padx=12, pady=7,
-                           width=max(len(v) for v in self._values))
+            row = tk.Label(inner, text=("  " if value != chosen else "\u2713 ")
+                           + value, anchor="w", background=PANEL,
+                           foreground=INK, font=self._font,
+                           padx=FIELD_PAD - 4, pady=8)
             row.pack(fill="x")
             row.bind("<Enter>", lambda e, r=row: r.configure(
                 background=ACCENT_SOFT))
             row.bind("<Leave>", lambda e, r=row: r.configure(background=PANEL))
             row.bind("<Button-1>", lambda e, v=value: self._choose(v))
 
+        popup.update_idletasks()
+        popup.geometry(f"{max(self.winfo_width(), 160)}"
+                       f"x{inner.winfo_reqheight() + 2}")
         popup.lift()
         self._popup = popup
 
@@ -449,6 +477,59 @@ class Dropdown(tk.Canvas):
         return super().__getitem__(key)
 
 
+class Field(tk.Canvas):
+    """
+    A text field with rounded corners and a hairline border.
+
+    Tk's Entry is a rectangle and cannot be anything else, and the platform
+    themes draw it with a sunken 3D bevel - the other thing, along with the
+    square grey button, that dates a window instantly. Drawing the field on a
+    canvas and dropping a borderless Entry into the middle of it gives the
+    rounded, one-pixel-bordered box the rest of the window is built from, at
+    exactly the same height as every button.
+
+    Exposes `.entry` so the placeholder and key bindings stay where they were.
+    """
+
+    HEIGHT = CONTROL_H
+    RADIUS = RADIUS
+
+    def __init__(self, master, textvariable, font, background=BG, **kw):
+        super().__init__(master, height=self.HEIGHT, highlightthickness=0,
+                         bd=0, background=background, **kw)
+        self._focused = False
+        self.entry = tk.Entry(self, textvariable=textvariable, font=font,
+                              relief="flat", background=PANEL, foreground=INK,
+                              insertbackground=INK, borderwidth=0,
+                              highlightthickness=0)
+        self._slot = self.create_window(FIELD_PAD, self.HEIGHT // 2,
+                                        window=self.entry, anchor="w",
+                                        height=self.HEIGHT - 12)
+        self.bind("<Configure>", lambda e: self._draw())
+        # The canvas is bigger than the entry inside it, so the curved ends
+        # are clickable too. Clicking a text field anywhere should put the
+        # cursor in it.
+        self.bind("<Button-1>", lambda e: self.entry.focus_set())
+        self.entry.bind("<FocusIn>", self._focus(True), add="+")
+        self.entry.bind("<FocusOut>", self._focus(False), add="+")
+
+    def _focus(self, on):
+        def handler(_event):
+            self._focused = on
+            self._draw()
+        return handler
+
+    def _draw(self):
+        self.delete("all")
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
+                    fill=PANEL, outline=ACCENT if self._focused else LINE)
+        self.itemconfigure(self._slot, width=max(width - FIELD_PAD * 2, 10))
+        self.coords(self._slot, FIELD_PAD, self.HEIGHT // 2)
+
+
 class Segmented(tk.Frame):
     """
     A two-option segmented control, bound to a StringVar.
@@ -469,7 +550,8 @@ class Segmented(tk.Frame):
             button = PillButton(self, label, kind="ghost", font=font,
                                 background=SIDEBAR,
                                 command=lambda v=value: self._choose(v))
-            button.grid(row=index, column=0, sticky="we", pady=(0, 6))
+            button.grid(row=index, column=0, sticky="we",
+                        pady=(0, 8 if index == 0 else 0))
             self.columnconfigure(0, weight=1)
             self._buttons[value] = button
         self._paint()
@@ -558,42 +640,28 @@ class App:
                     font=self.font_title)
         s.configure("Sub.TLabel", background=BG, foreground=MUTED,
                     font=self.font_small)
-        # Section headings in the rail: small, upper case, quiet.
-        s.configure("Section.TLabel", background=SIDEBAR, foreground=FAINT,
-                    font=self.font_section)
-        s.configure("Field.TLabel", background=SIDEBAR, foreground=MUTED,
-                    font=self.font_small)
         s.configure("Status.TLabel", background=BG, foreground=MUTED,
                     font=self.font_small)
 
-        s.configure("TEntry", fieldbackground=PANEL, borderwidth=1,
-                    relief="solid", padding=6)
-        s.map("TEntry", bordercolor=[("focus", ACCENT), ("!focus", LINE)])
-        s.configure("TCombobox", fieldbackground=PANEL, background=PANEL,
-                    borderwidth=1, relief="solid", padding=5,
-                    arrowsize=14)
-        s.map("TCombobox", bordercolor=[("focus", ACCENT), ("!focus", LINE)],
-              fieldbackground=[("readonly", PANEL)])
-
-        s.configure("TCheckbutton", background=SIDEBAR, foreground=INK,
-                    font=self.font_small)
-        s.map("TCheckbutton", background=[("active", SIDEBAR)])
-        s.configure("Main.TCheckbutton", background=BG, foreground=INK,
-                    font=self.font_small)
-        s.map("Main.TCheckbutton", background=[("active", BG)])
-
+        # Entries, comboboxes and checkbuttons are all drawn by this app now
+        # (Field, Dropdown, CheckBox), so there is nothing left here to style
+        # from the platform theme except the table and the progress bar.
         s.configure("Treeview", background=PANEL, fieldbackground=PANEL,
-                    foreground=INK, rowheight=30, borderwidth=0,
+                    foreground=INK, rowheight=32, borderwidth=0,
                     font=self.font_body)
-        s.configure("Treeview.Heading", background=BG, foreground=MUTED,
-                    relief="flat", borderwidth=0, padding=(10, 9),
-                    font=self.font_small)
-        s.map("Treeview.Heading", background=[("active", STRIPE)])
+        # A tinted heading band rather than a border under it: the heading
+        # is inside the Treeview, so there is nowhere to put a line between
+        # it and the first row. A wash of colour separates them just as well.
+        s.configure("Treeview.Heading", background=STRIPE, foreground=MUTED,
+                    relief="flat", borderwidth=0, padding=(12, 11),
+                    font=self.font_section)
+        s.map("Treeview.Heading", background=[("active", ACCENT_SOFT)],
+              foreground=[("active", INK)])
         s.map("Treeview", background=[("selected", ACCENT_SOFT)],
               foreground=[("selected", INK)])
 
         s.configure("Thin.Horizontal.TProgressbar", troughcolor=LINE,
-                    background=ACCENT, borderwidth=0, thickness=4)
+                    background=ACCENT, borderwidth=0, thickness=6)
 
     # -- the window ---------------------------------------------------------
     def _build(self):
@@ -615,141 +683,175 @@ class App:
         The settings rail. Everything you choose before scanning lives here,
         which leaves the whole of the rest of the window for results - the
         part people actually spend their time reading.
+
+        Every control in it is the full width of the rail and the same
+        height. A rail of buttons that each stop at a different place reads
+        as an unfinished form; one flush column reads as a panel.
         """
-        rail = tk.Frame(self.root, background=SIDEBAR, width=278)
+        rail = tk.Frame(self.root, background=SIDEBAR, width=RAIL_W)
         rail.grid(row=0, column=0, sticky="nsw")
         rail.grid_propagate(False)
         rail.columnconfigure(0, weight=1)
+        rail.rowconfigure(0, weight=1)
 
         tk.Frame(self.root, background=LINE, width=1).grid(
             row=0, column=0, sticky="nse")
 
-        pad = 20
-        row = 0
+        # The settings scroll; the two scan controls do not. In deep-scan
+        # mode the file-type list makes the rail taller than a 720-pixel
+        # window, and the button that starts the scan is the last thing that
+        # should be pushed off the bottom of the screen to make room.
+        view = tk.Canvas(rail, background=SIDEBAR, highlightthickness=0, bd=0)
+        view.grid(row=0, column=0, sticky="nsew")
+        self._rail_bar = ThinScrollbar(rail, command=view.yview,
+                                       background=SIDEBAR)
+        self._rail_bar.grid(row=0, column=1, sticky="ns", pady=6)
+        view.configure(yscrollcommand=self._rail_bar.set)
+        content = tk.Frame(view, background=SIDEBAR)
+        slot = view.create_window(0, 0, window=content, anchor="nw")
+        view.bind("<Configure>",
+                  lambda e: view.itemconfigure(slot, width=e.width))
+        content.bind("<Configure>",
+                     lambda e: view.configure(scrollregion=view.bbox("all")))
+        self._rail_view = view
 
-        brand = tk.Frame(rail, background=SIDEBAR)
-        brand.grid(row=row, column=0, sticky="we", padx=pad, pady=(22, 4))
+        pad = GUTTER
+        text_width = RAIL_W - pad * 2
+        content.columnconfigure(0, weight=1)
+        self._rail_row = 0
+
+        def place(widget, top=0, bottom=0, fill=True):
+            widget.grid(row=self._rail_row, column=0,
+                        sticky="we" if fill else "w",
+                        # The scrollbar lives in its own column beside the
+                        # canvas, so the right pad has to give that width
+                        # back - otherwise everything in the scrolling part
+                        # sits two pixels narrower than the buttons below it.
+                        padx=(pad, pad - ThinScrollbar.WIDTH),
+                        pady=(top, bottom))
+            self._rail_row += 1
+            return widget
+
+        def section(text, top):
+            """A heading, always the same size and always the same gap."""
+            place(tk.Label(content, text=text, background=SIDEBAR,
+                           foreground=FAINT, font=self.font_section,
+                           anchor="w"), top=top, bottom=8)
+
+        # --- brand
+        brand = tk.Frame(content, background=SIDEBAR)
         tk.Label(brand, text=APP_NAME, background=SIDEBAR, foreground=INK,
                  font=self.font_title).pack(side="left")
-        tk.Label(brand, text=f"  {VERSION}", background=SIDEBAR,
-                 foreground=FAINT, font=self.font_small).pack(side="left",
-                                                              pady=(8, 0))
-        row += 1
-        tk.Label(rail, text="Read-only. Your files are never touched.",
-                 background=SIDEBAR, foreground=MUTED, font=self.font_small,
-                 wraplength=238, justify="left").grid(
-            row=row, column=0, sticky="w", padx=pad, pady=(0, 18))
-        row += 1
+        tk.Label(brand, text=VERSION, background=SIDEBAR, foreground=FAINT,
+                 font=self.font_small).pack(side="left", padx=(7, 0),
+                                            pady=(9, 0))
+        place(brand, top=26, bottom=4)
+        place(tk.Label(content, text="Read-only. Your files are never touched.",
+                       background=SIDEBAR, foreground=MUTED,
+                       font=self.font_small, wraplength=text_width,
+                       anchor="w", justify="left"), bottom=24)
 
         # --- drive
-        ttk.Label(rail, text="DRIVE", style="Section.TLabel").grid(
-            row=row, column=0, sticky="w", padx=pad)
-        row += 1
+        section("DRIVE", top=0)
         self.volumes = []
         self.drive_var = tk.StringVar()
-        self.drive_box = Dropdown(rail, textvariable=self.drive_var,
-                                  command=self._show_drive_detail,
-                                  font=self.font_small, background=SIDEBAR)
-        self.drive_box.grid(row=row, column=0, sticky="we", padx=pad,
-                            pady=(6, 2))
-        row += 1
+        self.drive_box = place(
+            Dropdown(content, textvariable=self.drive_var,
+                     command=self._show_drive_detail, font=self.font_small,
+                     background=SIDEBAR), bottom=8)
         # The device path lives under the box rather than inside it. A rail
         # this narrow truncates a long label without saying so, and the tail
         # is exactly the part that identifies the drive.
         self.drive_detail = tk.StringVar()
-        tk.Label(rail, textvariable=self.drive_detail, background=SIDEBAR,
-                 foreground=FAINT, font=self.font_mono, anchor="w",
-                 justify="left", wraplength=238).grid(
-            row=row, column=0, sticky="we", padx=pad, pady=(0, 6))
-        row += 1
-        PillButton(rail, "Refresh drives", kind="ghost",
-                   font=self.font_small, background=SIDEBAR,
-                   command=self._refresh_drives).grid(
-            row=row, column=0, sticky="w", padx=pad, pady=(0, 18))
-        row += 1
+        place(tk.Label(content, textvariable=self.drive_detail,
+                       background=SIDEBAR, foreground=FAINT,
+                       font=self.font_mono, anchor="w", justify="left",
+                       wraplength=text_width), bottom=10)
+        place(PillButton(content, "Refresh drives", kind="ghost",
+                         font=self.font_small, background=SIDEBAR,
+                         command=self._refresh_drives), bottom=22)
 
         # --- mode
-        ttk.Label(rail, text="MODE", style="Section.TLabel").grid(
-            row=row, column=0, sticky="w", padx=pad)
-        row += 1
+        section("MODE", top=0)
         self.mode_var = tk.StringVar(value="undelete")
-        Segmented(rail, self.mode_var,
-                  [("undelete", "Undelete  ·  keeps filenames"),
-                   ("carve", "Deep scan  ·  any drive")],
-                  command=self._toggle_mode).grid(
-            row=row, column=0, sticky="we", padx=pad, pady=(8, 14))
-        row += 1
+        place(Segmented(content, self.mode_var,
+                        [("undelete", "Undelete  \u00b7  keeps filenames"),
+                         ("carve", "Deep scan  \u00b7  any drive")],
+                        command=self._toggle_mode), bottom=22)
 
         # --- file types, only relevant to deep scan
-        self.types_row = tk.Frame(rail, background=SIDEBAR)
-        self.types_row.grid(row=row, column=0, sticky="we", padx=pad,
-                            pady=(0, 14))
-        ttk.Label(self.types_row, text="FILE TYPES",
-                  style="Section.TLabel").grid(row=0, column=0, columnspan=3,
-                                               sticky="w", pady=(0, 6))
+        self.types_row = tk.Frame(content, background=SIDEBAR)
+        tk.Label(self.types_row, text="FILE TYPES", background=SIDEBAR,
+                 foreground=FAINT, font=self.font_section, anchor="w").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
         self.type_vars = {}
+        for column in range(3):
+            self.types_row.columnconfigure(column, weight=1, uniform="types")
         for i, ext in enumerate(sorted(carve.SIGNATURES)):
             var = tk.BooleanVar(value=ext in ("jpg", "png", "pdf"))
             self.type_vars[ext] = var
             CheckBox(self.types_row, ext, var, font=self.font_small,
                      background=SIDEBAR).grid(
-                row=1 + i // 3, column=i % 3, sticky="w", padx=(0, 8))
-        row += 1
+                row=1 + i // 3, column=i % 3, sticky="w", pady=1)
+        place(self.types_row, bottom=22)
 
         # --- destination
-        ttk.Label(rail, text="RECOVER TO", style="Section.TLabel").grid(
-            row=row, column=0, sticky="w", padx=pad)
-        row += 1
+        section("RECOVER TO", top=0)
         self.dest_var = tk.StringVar(
             value=os.path.join(os.path.expanduser("~"), "Recovered"))
-        self._hairline(rail, self.dest_var, self.font_small,
-                       background=SIDEBAR).grid(
-            row=row, column=0, sticky="we", padx=pad, pady=(6, 6))
-        row += 1
-        PillButton(rail, "Choose folder...", kind="ghost",
-                   font=self.font_small, background=SIDEBAR,
-                   command=self._pick_dest).grid(row=row, column=0,
-                                                 sticky="w", padx=pad)
-        row += 1
+        place(Field(content, self.dest_var, self.font_small,
+                    background=SIDEBAR), bottom=8)
+        place(PillButton(content, "Choose folder\u2026", kind="ghost",
+                         font=self.font_small, background=SIDEBAR,
+                         command=self._pick_dest), bottom=20)
 
-        rail.rowconfigure(row, weight=1)
-        row += 1
+        place(tk.Frame(content, background=SIDEBAR, height=4), bottom=0)
 
-        self.scan_btn = PillButton(rail, "Start scan", command=self._start,
+        # --- the footer, outside the scrolling part
+        footer = tk.Frame(rail, background=SIDEBAR)
+        footer.grid(row=1, column=0, columnspan=2, sticky="we")
+        footer.columnconfigure(0, weight=1)
+        tk.Frame(footer, background=LINE, height=1).grid(
+            row=0, column=0, sticky="we")
+        self.scan_btn = PillButton(footer, "Start scan", command=self._start,
                                    kind="primary", font=self.font_body,
-                                   background=SIDEBAR, width=238)
-        self.scan_btn.grid(row=row, column=0, padx=pad, pady=(10, 8))
-        row += 1
-        self.stop_btn = PillButton(rail, "Stop", command=self._stop,
+                                   background=SIDEBAR)
+        self.scan_btn.grid(row=1, column=0, sticky="we", padx=pad,
+                           pady=(16, 8))
+        self.stop_btn = PillButton(footer, "Stop", command=self._stop,
                                    kind="ghost", font=self.font_small,
-                                   background=SIDEBAR, width=238)
+                                   background=SIDEBAR)
+        self.stop_btn.grid(row=2, column=0, sticky="we", padx=pad,
+                           pady=(0, 20))
         self.stop_btn["state"] = "disabled"
-        self.stop_btn.grid(row=row, column=0, padx=pad, pady=(0, 22))
 
+        self._bind_wheel(rail)
         self._refresh_drives()
         self._toggle_mode()
 
-    def _hairline(self, master, variable, font, background):
+    def _bind_wheel(self, widget):
         """
-        An entry with a one-pixel border in our own colour.
+        Make the wheel scroll the rail wherever the pointer is inside it.
 
-        ttk draws entry borders from the platform theme, which on every theme
-        this app can reach means a sunken 3D bevel. A flat frame one pixel
-        larger than the entry gives a hairline instead, and lights up on
-        focus the way a current text field does.
+        Tk sends a wheel event to the widget under the pointer and no
+        further - it does not travel up to the parent - so a rail whose
+        canvas alone is bound only scrolls in the gaps between the controls.
         """
-        frame = tk.Frame(master, background=LINE, highlightthickness=0)
-        entry = tk.Entry(frame, textvariable=variable, font=font,
-                         relief="flat", background=PANEL, foreground=INK,
-                         insertbackground=INK, borderwidth=0,
-                         highlightthickness=0)
-        entry.pack(fill="both", expand=True, padx=1, pady=1, ipady=6, ipadx=8)
-        entry.bind("<FocusIn>", lambda e: frame.configure(background=ACCENT),
-                   add="+")
-        entry.bind("<FocusOut>", lambda e: frame.configure(background=LINE),
-                   add="+")
-        frame.entry = entry
-        return frame
+        widget.bind("<MouseWheel>", self._wheel_rail, add="+")
+        widget.bind("<Button-4>", self._wheel_rail, add="+")     # X11
+        widget.bind("<Button-5>", self._wheel_rail, add="+")
+        for child in widget.winfo_children():
+            self._bind_wheel(child)
+
+    def _wheel_rail(self, event):
+        if getattr(event, "num", 0) in (4, 5):
+            step = -1 if event.num == 4 else 1
+        elif abs(event.delta) >= 120:            # Windows sends multiples
+            step = -event.delta // 120
+        else:                                    # macOS sends small numbers
+            step = -event.delta
+        self._rail_view.yview_scroll(int(step), "units")
+        return "break"
 
     def _build_main(self):
         main = tk.Frame(self.root, background=BG)
@@ -759,26 +861,29 @@ class App:
 
         # --- header: what this screen is, and the one action that matters
         header = tk.Frame(main, background=BG)
-        header.grid(row=0, column=0, sticky="we", padx=26, pady=(24, 6))
+        header.grid(row=0, column=0, sticky="we", padx=GUTTER, pady=(26, 2))
         header.columnconfigure(0, weight=1)
+        header.rowconfigure(0, weight=1)
+        header.rowconfigure(1, weight=1)
         ttk.Label(header, text="Deleted files", style="Title.TLabel").grid(
             row=0, column=0, sticky="w")
-        self.recover_btn = PillButton(header, "Recover selected",
-                                      command=self._recover, kind="primary",
-                                      font=self.font_body)
-        self.recover_btn["state"] = "disabled"
-        self.recover_btn.grid(row=0, column=1, sticky="e")
         ttk.Label(header, textvariable=self.subtitle_var,
                   style="Sub.TLabel").grid(row=1, column=0, sticky="w",
-                                           pady=(2, 0))
+                                           pady=(3, 0))
+        # Spanning both rows centres it against the title and its subtitle
+        # together, rather than leaving it hanging off the top line.
+        self.recover_btn = PillButton(header, "Recover selected",
+                                      command=self._recover, kind="primary",
+                                      font=self.font_body, width=ACTION_W)
+        self.recover_btn["state"] = "disabled"
+        self.recover_btn.grid(row=0, column=1, rowspan=2, sticky="e")
 
         # --- filter bar
         bar = tk.Frame(main, background=BG)
-        bar.grid(row=1, column=0, sticky="we", padx=26, pady=(14, 10))
+        bar.grid(row=1, column=0, sticky="we", padx=GUTTER, pady=(18, 12))
         bar.columnconfigure(0, weight=1)
         self.search_var = tk.StringVar()
-        wrap = self._hairline(bar, self.search_var, self.font_body,
-                              background=BG)
+        wrap = Field(bar, self.search_var, self.font_body, background=BG)
         wrap.grid(row=0, column=0, sticky="we")
         entry = wrap.entry
         entry.configure(foreground=FAINT)
@@ -801,21 +906,25 @@ class App:
                 entry.configure(foreground=FAINT)
                 entry.insert(0, self._placeholder)
 
-        entry.bind("<FocusIn>", focus_in)
-        entry.bind("<FocusOut>", focus_out)
+        # add="+" both times: the field lights its own border on focus, and
+        # a plain bind here would silently replace that binding rather than
+        # join it.
+        entry.bind("<FocusIn>", focus_in, add="+")
+        entry.bind("<FocusOut>", focus_out, add="+")
         self.search_entry = entry
         self.only_good = tk.BooleanVar(value=False)
         CheckBox(bar, "Only likely recoverable", self.only_good,
                  command=self._apply_filter, font=self.font_small,
-                 background=BG).grid(row=0, column=1, padx=(14, 0))
-        PillButton(bar, "Select all", kind="ghost", font=self.font_small,
-                   command=self._select_all).grid(row=0, column=2,
-                                                  padx=(10, 0))
+                 background=BG).grid(row=0, column=1, padx=(16, 16))
+        self.select_all_btn = PillButton(
+            bar, "Select all", kind="ghost", font=self.font_small,
+            width=ACTION_W, command=self._select_all)
+        self.select_all_btn.grid(row=0, column=2)
 
         # --- results
         table = tk.Frame(main, background=PANEL, highlightthickness=1,
                          highlightbackground=LINE)
-        table.grid(row=2, column=0, sticky="nsew", padx=26)
+        table.grid(row=2, column=0, sticky="nsew", padx=GUTTER)
         table.columnconfigure(0, weight=1)
         table.rowconfigure(0, weight=1)
 
@@ -825,17 +934,18 @@ class App:
         headings = {"name": "File name", "folder": "Original folder",
                     "size": "Size", "deleted": "Deleted",
                     "chance": "Chance", "condition": "Condition"}
-        widths = {"name": 250, "folder": 240, "size": 90,
-                  "deleted": 130, "chance": 80, "condition": 170}
+        widths = {"name": 260, "folder": 240, "size": 96,
+                  "deleted": 140, "chance": 84, "condition": 184}
+        self._headings = headings
         for c in cols:
             self.tree.heading(c, text=headings[c],
                               command=lambda col=c: self._sort(col))
-            self.tree.column(c, width=widths[c],
+            self.tree.column(c, width=widths[c], minwidth=64,
                              anchor="e" if c in ("size", "chance") else "w")
-        self.tree.grid(row=0, column=0, sticky="nsew")
+        self.tree.grid(row=0, column=0, sticky="nsew", padx=(6, 0))
 
         vs = ThinScrollbar(table, command=self.tree.yview, background=PANEL)
-        vs.grid(row=0, column=1, sticky="ns", padx=(0, 3), pady=3)
+        vs.grid(row=0, column=1, sticky="ns", padx=(0, 4), pady=4)
         self.tree.configure(yscrollcommand=vs.set)
 
         # Colouring a whole row in red or green shouts. A faint wash carries
@@ -864,12 +974,12 @@ class App:
 
         # --- status strip
         status = tk.Frame(main, background=BG)
-        status.grid(row=3, column=0, sticky="we", padx=26, pady=(10, 18))
+        status.grid(row=3, column=0, sticky="we", padx=GUTTER, pady=(14, 20))
         status.columnconfigure(0, weight=1)
         ttk.Label(status, textvariable=self.status_var,
                   style="Status.TLabel").grid(row=0, column=0, sticky="w")
         self.progress = ttk.Progressbar(
-            status, length=220, mode="determinate",
+            status, length=ACTION_W, mode="determinate",
             style="Thin.Horizontal.TProgressbar")
         self.progress.grid(row=0, column=1, sticky="e")
         self.progress.grid_remove()          # only while something is running
@@ -895,6 +1005,15 @@ class App:
             self.types_row.grid()
         else:
             self.types_row.grid_remove()
+        # The rail just got shorter or taller. If everything fits again,
+        # scroll back to the top - otherwise the settings sit half off the
+        # top of a rail with empty space below them.
+        view = getattr(self, "_rail_view", None)
+        if view is not None:
+            view.update_idletasks()
+            first, last = view.yview()
+            if last - first >= 1.0:
+                view.yview_moveto(0)
 
     def _pick_dest(self):
         d = filedialog.askdirectory(title="Choose where to save recovered files")
@@ -1191,7 +1310,21 @@ class App:
             self.sort_reverse = not self.sort_reverse
         else:
             self.sort_column, self.sort_reverse = column, False
+        self._mark_sorted_column()
         self._apply_filter()
+
+    def _mark_sorted_column(self):
+        """
+        Put an arrow on the column being sorted by.
+
+        A table that reorders itself with no indication of what it just did
+        looks like it lost the results rather than sorted them.
+        """
+        for name, text in self._headings.items():
+            arrow = ""
+            if name == self.sort_column:
+                arrow = "  \u2193" if self.sort_reverse else "  \u2191"
+            self.tree.heading(name, text=text + arrow)
 
     def _do_sort(self):
         keys = {

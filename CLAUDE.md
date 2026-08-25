@@ -277,6 +277,17 @@ Agreed next steps, in order:
 
 ## Style
 
+- **The window is built from four numbers.** `CONTROL_H`, `RADIUS`, `GUTTER`
+  and `RAIL_W` at the top of `app.py` decide the size of everything you can
+  click or type into. No widget picks its own height, and no layout invents
+  its own margin - that is the whole difference between a window that looks
+  designed and one that looks assembled. Every entry, dropdown and button is
+  drawn by this app (`Field`, `Dropdown`, `PillButton`, `CheckBox`,
+  `Segmented`, `ThinScrollbar`) because the platform themes cannot round a
+  corner or draw a one-pixel border. `LayoutTests` in
+  `tests/test_gui_behaviour.py` measures the finished window in pixels -
+  equal sizes, one flush left edge, right edges on the table's line, and the
+  Start scan button still on screen at the smallest window size.
 - Standard library only. Python 3.8-compatible syntax.
 - Comments explain *why*, especially for filesystem-format quirks — the NTFS
   spec is not obvious to a reader.
