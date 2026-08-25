@@ -1,5 +1,7 @@
 # RecoverKit
 
+[![tests](https://github.com/thiraj/recoverkit/actions/workflows/tests.yml/badge.svg)](https://github.com/thiraj/recoverkit/actions/workflows/tests.yml)
+
 Free, open-source file recovery for Windows, macOS and Linux.
 
 Recover deleted files — with their **original names and folders** where the
@@ -142,6 +144,10 @@ No dependencies, no root, no disk images to download — the suite builds real
 NTFS and exFAT volumes in memory and reads them back with the same parsers
 that read a physical drive. Every test also re-checks that the image it
 scanned is byte-for-byte unchanged afterwards.
+
+Every push runs it on Windows, macOS and Linux across Python 3.8 to 3.13, and
+runs the real-filesystem tests on Linux where `mkntfs` and `mkfs.exfat`
+exist.
 
 There is a second layer that formats and mounts a real filesystem with the
 operating system's own tools. It needs `ntfs-3g` (Linux) or

@@ -1,0 +1,99 @@
+# Runs the test suite everywhere the tool claims to work.
+#
+# The point of this file is Windows. Windows is where NTFS lives and where
+# most people needing this tool are, and until now not one line of the
+# Windows code paths had ever been executed - 13 tests skip on every other
+# platform. Development happens on a Mac, so CI is the only thing that will
+# ever run them.
+#
+# No dependencies are installed for the suite itself: the project is standard
+# library only, and a run that needed `pip install` would mean that had
+# quietly stopped being true.
+
+name: tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    name: ${{ matrix.os }} · python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false          # one platform failing must not hide the others
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        python: ["3.9", "3.11", "3.13"]
+        include:
+          # 3.8 is the documented minimum. It is gone from the newer runner
+          # images, so it gets an older one rather than being dropped.
+          - os: ubuntu-22.04
+            python: "3.8"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Tk is not part of a Linux python install, and there is no display on
+      # a runner. Both are needed for the window tests to run rather than
+      # skip - and a skipped test proves nothing.
+      - name: Give Linux a Tk and a display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb
+
+      - name: Run the suite
+        if: runner.os != 'Linux'
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Run the suite (with a virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m unittest discover -s tests -t . -v
+
+      # A count is worth having: a platform where everything silently skips
+      # looks identical to a platform where everything passes.
+      - name: Report what actually ran
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import platform, sys
+          print(f"{platform.system()} {platform.release()}  python {sys.version.split()[0]}")
+          try:
+              import tkinter
+              print("tkinter: importable")
+          except Exception as e:
+              print(f"tkinter: unavailable ({e})")
+          PY
+
+  integration:
+    name: real filesystems · linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The procedure CLAUDE.md has described since the beginning: format a
+      # real volume with the operating system's own tools, write files into
+      # it, delete them with a real driver, then scan the image. These tests
+      # have never once run - there is no mkntfs on macOS.
+      - name: Install the filesystem tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ntfs-3g exfatprogs fuse
+
+      - name: NTFS and exFAT, formatted and deleted for real
+        env:
+          RECOVERKIT_INTEGRATION: "1"
+        run: |
+          sudo -E env "PATH=$PATH" python -m unittest \
+            tests.test_integration_ntfs tests.test_integration_exfat -v
