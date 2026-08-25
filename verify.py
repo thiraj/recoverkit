@@ -44,6 +44,20 @@ import os
 import struct
 import zlib
 
+
+def _hand_to_user(path):
+    """
+    A trimmed copy belongs to the user, same as the recovered file it came
+    from. Imported lazily so this module keeps standing on its own - it is
+    the one engine that reads ordinary files rather than a drive, and people
+    do use it that way.
+    """
+    try:
+        import recovery
+        recovery.hand_to_user(path)
+    except Exception:
+        pass
+
 # Verdicts.
 INTACT = "intact"
 TRAILING = "trailing"          # longer than it should be - trimmable
@@ -510,6 +524,7 @@ def trim_copy(path, report=None, dest=None):
                 break
             out.write(chunk)
             remaining -= len(chunk)
+    _hand_to_user(dest)
     return dest
 
 

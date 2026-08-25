@@ -78,7 +78,10 @@ service.py  The engines behind a line protocol - one JSON object per line
 recovery.py Where a recovered file is allowed to land. Shared by the window
             and the service, because "never overwrite, never escape the
             destination folder" is not a rule to keep two copies of. Folder
-            names come off a damaged filesystem and are untrusted.
+            names come off a damaged filesystem and are untrusted. Also hands
+            what it writes back to the user underneath `sudo` (SUDO_UID):
+            root-owned output cannot be deleted or moved by the person who
+            recovered it, because that needs write permission on the folder.
 verify.py   Structural check on an already-recovered file: walks the whole
             container rather than just the header, and trims the ones whose
             own bookkeeping says where they really end. Never touches a

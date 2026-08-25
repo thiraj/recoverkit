@@ -983,7 +983,9 @@ class App:
                 "USB stick is ideal.")
             return None
         try:
-            os.makedirs(dest, exist_ok=True)
+            # Not os.makedirs: under sudo this is where the recovery folder
+            # first gets created, and it has to end up belonging to the user.
+            recovery.make_folder(dest)
             probe = os.path.join(dest, ".recoverkit_write_test")
             with open(probe, "wb") as fh:
                 fh.write(b"ok")
