@@ -49,13 +49,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-tk xvfb
 
+      # Failures are echoed back as workflow annotations, not just left in
+      # the log. A log download needs a token; an annotation is readable by
+      # anyone looking at the run, which includes whoever is trying to fix it
+      # from a different machine.
       - name: Run the suite
-        if: runner.os != 'Linux'
-        run: python -m unittest discover -s tests -t . -v
-
-      - name: Run the suite (with a virtual display)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a python -m unittest discover -s tests -t . -v
+        shell: bash
+        run: |
+          set +e
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a python -m unittest discover -s tests -t . -v 2>&1 | tee out.txt
+          else
+            python -m unittest discover -s tests -t . -v 2>&1 | tee out.txt
+          fi
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E "^(FAIL|ERROR):" out.txt | head -12 | while read -r line; do
+              echo "::error::$line"
+            done
+            grep -E "^(AssertionError|[A-Za-z]*Error):" out.txt | head -8 | \
+              while read -r line; do echo "::error::$line"; done
+            tail -3 out.txt | while read -r line; do echo "::error::$line"; done
+          fi
+          tail -3 out.txt >> "$GITHUB_STEP_SUMMARY"
+          exit $status
 
       # A count is worth having: a platform where everything silently skips
       # looks identical to a platform where everything passes.
@@ -100,5 +117,14 @@ jobs:
         env:
           RECOVERKIT_INTEGRATION: "1"
         run: |
+          set +e
           sudo -E "$(which python)" -m unittest \
-            tests.test_integration_ntfs tests.test_integration_exfat -v
+            tests.test_integration_ntfs tests.test_integration_exfat -v 2>&1 \
+            | tee out.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E "^(FAIL|ERROR):|^(AssertionError|[A-Za-z]*Error):" out.txt \
+              | head -12 | while read -r line; do echo "::error::$line"; done
+            tail -3 out.txt | while read -r line; do echo "::error::$line"; done
+          fi
+          exit $status
