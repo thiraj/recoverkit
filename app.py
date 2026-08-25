@@ -42,6 +42,8 @@ WARN = "#9a5b06"
 BAD = "#c0342c"
 LINE = "#e3e8ee"
 STRIPE = "#fafbfc"
+WASH_WARN = "#fff8ec"   # a hint of caution, not a warning label
+WASH_BAD = "#fdf1f0"
 DISABLED = "#c3ccd8"
 
 
@@ -121,11 +123,17 @@ class PillButton(tk.Canvas):
 
         super().__init__(master, width=self._width, height=self.HEIGHT,
                          highlightthickness=0, bd=0, background=background,
-                         cursor="arrow", **kw)
+                         cursor="arrow", takefocus=1, **kw)
         self._draw()
         self.bind("<Button-1>", self._press)
         self.bind("<Enter>", lambda e: self._draw(hover=True))
         self.bind("<Leave>", lambda e: self._draw())
+        # A hand-drawn button still has to behave like a button: reachable by
+        # Tab, and pressed by Space or Return.
+        self.bind("<FocusIn>", lambda e: self._draw(hover=True))
+        self.bind("<FocusOut>", lambda e: self._draw())
+        self.bind("<Return>", self._press)
+        self.bind("<space>", self._press)
 
     # -- appearance ---------------------------------------------------------
     def _colours(self, hover):
@@ -220,11 +228,11 @@ class Segmented(tk.Frame):
 # What the Condition column says. Blank where we have no opinion - an
 # unrecognised file type gets no verdict rather than a guess.
 CONDITION_TEXT = {
-    signatures.MATCH: "looks intact",
-    signatures.MISMATCH: "content gone",
-    signatures.BLANK: "space is empty",
-    signatures.MOVED: "in the Trash - not deleted",
-    signatures.IN_USE: "space reused - may work",
+    signatures.MATCH: "\u25cf  looks intact",
+    signatures.MISMATCH: "\u25cb  content gone",
+    signatures.BLANK: "\u25cb  space is empty",
+    signatures.MOVED: "\u21a9  in the Trash, not deleted",
+    signatures.IN_USE: "\u25d0  space reused, may work",
     signatures.UNKNOWN: "",
 }
 
@@ -233,8 +241,8 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title(f"{APP_NAME} {VERSION}")
-        root.geometry("1040x680")
-        root.minsize(880, 560)
+        root.geometry("1180x720")
+        root.minsize(1000, 600)
         root.configure(bg=BG)
 
         self.results = []          # every file found
@@ -374,7 +382,18 @@ class App:
         self.drive_box = ttk.Combobox(rail, textvariable=self.drive_var,
                                       state="readonly", font=self.font_small)
         self.drive_box.grid(row=row, column=0, sticky="we", padx=pad,
-                            pady=(6, 6))
+                            pady=(6, 2))
+        self.drive_box.bind("<<ComboboxSelected>>",
+                            lambda e: self._show_drive_detail())
+        row += 1
+        # The device path lives under the box rather than inside it. A rail
+        # this narrow truncates a long label without saying so, and the tail
+        # is exactly the part that identifies the drive.
+        self.drive_detail = tk.StringVar()
+        tk.Label(rail, textvariable=self.drive_detail, background=SIDEBAR,
+                 foreground=FAINT, font=self.font_mono, anchor="w",
+                 justify="left", wraplength=238).grid(
+            row=row, column=0, sticky="we", padx=pad, pady=(0, 6))
         row += 1
         PillButton(rail, "Refresh drives", kind="ghost",
                    font=self.font_small, background=SIDEBAR,
@@ -470,9 +489,30 @@ class App:
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._apply_filter())
         entry = ttk.Entry(bar, textvariable=self.search_var,
-                          font=self.font_body)
+                          font=self.font_body, foreground=FAINT)
         entry.grid(row=0, column=0, sticky="we")
         entry.bind("<Escape>", lambda e: self.search_var.set(""))
+        # Tk has no placeholder, so it is one written in and taken back out
+        # again. Kept in a variable the filter knows to ignore.
+        self._placeholder = "Search by file name or folder"
+        self._placeholder_on = True
+        entry.insert(0, self._placeholder)
+
+        def focus_in(_event):
+            if self._placeholder_on:
+                entry.delete(0, "end")
+                entry.configure(foreground=INK)
+                self._placeholder_on = False
+
+        def focus_out(_event):
+            if not entry.get():
+                self._placeholder_on = True
+                entry.configure(foreground=FAINT)
+                entry.insert(0, self._placeholder)
+
+        entry.bind("<FocusIn>", focus_in)
+        entry.bind("<FocusOut>", focus_out)
+        self.search_entry = entry
         self.only_good = tk.BooleanVar(value=False)
         ttk.Checkbutton(bar, text="Only likely recoverable",
                         style="Main.TCheckbutton", variable=self.only_good,
@@ -508,11 +548,29 @@ class App:
         vs.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=vs.set)
 
-        self.tree.tag_configure("good", foreground=GOOD)
-        self.tree.tag_configure("partial", foreground=WARN)
-        self.tree.tag_configure("gone", foreground=BAD)
+        # Colouring a whole row in red or green shouts. A faint wash carries
+        # the same meaning without making the filename - the thing people are
+        # actually reading - hard to read.
+        self.tree.tag_configure("good", foreground=INK)
+        self.tree.tag_configure("partial", foreground=INK, background=WASH_WARN)
+        self.tree.tag_configure("gone", foreground=MUTED, background=WASH_BAD)
         self.tree.tag_configure("stripe", background=STRIPE)
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._update_buttons())
+
+        # Shown over the table whenever there is nothing in it. A blank white
+        # rectangle tells the user nothing about whether the app is working,
+        # still thinking, or finished and empty-handed.
+        self.empty = tk.Frame(table, background=PANEL)
+        self.empty_title = tk.StringVar()
+        self.empty_hint = tk.StringVar()
+        tk.Label(self.empty, textvariable=self.empty_title, background=PANEL,
+                 foreground=MUTED, font=self.font_body).pack()
+        tk.Label(self.empty, textvariable=self.empty_hint, background=PANEL,
+                 foreground=FAINT, font=self.font_small, wraplength=420,
+                 justify="center").pack(pady=(6, 0))
+        self._set_empty("Nothing scanned yet",
+                        "Choose a drive on the left, then press Start scan.")
+        self._show_empty(True)          # the window opens with nothing in it
 
         # --- status strip
         status = tk.Frame(main, background=BG)
@@ -524,6 +582,7 @@ class App:
             status, length=220, mode="determinate",
             style="Thin.Horizontal.TProgressbar")
         self.progress.grid(row=0, column=1, sticky="e")
+        self.progress.grid_remove()          # only while something is running
 
     def _check_privileges(self):
         elevated = True
@@ -564,7 +623,7 @@ class App:
         previous = self.drive_var.get()
         diskio.refresh()
         self.volumes = diskio.list_volumes()
-        labels = [v[0] for v in self.volumes]
+        labels = [self._short_label(v[0]) for v in self.volumes]
         self.drive_box["values"] = labels
 
         if previous in labels:
@@ -575,12 +634,28 @@ class App:
             self.drive_box.current(0)
         else:
             self.drive_var.set("")
+        self._show_drive_detail()
         return labels
+
+    @staticmethod
+    def _short_label(label):
+        """Name and facts, without the device path - that goes underneath."""
+        parts = label.split(diskio.PART)
+        return diskio.PART.join(parts[:2]) if len(parts) > 2 else label
+
+    def _show_drive_detail(self):
+        """Show the raw device path for whichever drive is selected."""
+        chosen = self.drive_var.get()
+        for label, path in self.volumes:
+            if self._short_label(label) == chosen:
+                self.drive_detail.set(path)
+                return
+        self.drive_detail.set("")
 
     def _source_path(self):
         name = self.drive_var.get()
         for display, path in self.volumes:
-            if display == name:
+            if self._short_label(display) == name:
                 return path
         return name
 
@@ -594,7 +669,7 @@ class App:
         the user did not choose - and the same-drive check that protects the
         recovery folder would be comparing against the wrong device too.
         """
-        fresh = self._refresh_drives()
+        self._refresh_drives()
         if any(path == source for _, path in self.volumes):
             return True
 
@@ -655,6 +730,7 @@ class App:
         self.stop_btn["state"] = "normal"
         self.recover_btn["state"] = "disabled"
         self.progress["value"] = 0
+        self.progress.grid()
 
         threading.Thread(target=self._worker, args=(source,),
                          daemon=True).start()
@@ -740,6 +816,8 @@ class App:
 
     def _apply_filter(self):
         term = self.search_var.get().strip().lower()
+        if getattr(self, "_placeholder_on", False):
+            term = ""
         only_good = self.only_good.get()
 
         self.visible = []
@@ -773,6 +851,23 @@ class App:
 
         shown = len(self.visible)
         total = len(self.results)
+        if shown:
+            self._show_empty(False)
+        elif total:
+            self._set_empty("Nothing matches that search",
+                            "Try part of a file name, or clear the box to see "
+                            "everything found.")
+            self._show_empty(True)
+        elif self.scanning:
+            self._set_empty("Scanning...", "Files will appear here as they "
+                                           "are found.")
+            self._show_empty(True)
+        else:
+            self._set_empty("Nothing found",
+                            "Nothing recoverable turned up on this drive. "
+                            "Deep scan looks for file contents instead of "
+                            "file records, and finds different things.")
+            self._show_empty(True)
         extra = "  ·  showing the first 20,000" if shown > 20000 else ""
         if total:
             self.subtitle_var.set(
@@ -784,6 +879,16 @@ class App:
             f"{shown:,} of {total:,} deleted items shown{extra}"
             if total else "Ready.")
         self._update_buttons()
+
+    def _set_empty(self, title, hint):
+        self.empty_title.set(title)
+        self.empty_hint.set(hint)
+
+    def _show_empty(self, showing):
+        if showing:
+            self.empty.place(relx=0.5, rely=0.45, anchor="center")
+        else:
+            self.empty.place_forget()
 
     def _sort(self, column):
         if self.sort_column == column:
@@ -985,6 +1090,7 @@ class App:
                     self.scan_btn["text"] = "Start scan"
                     self.stop_btn["state"] = "disabled"
                     self.progress["value"] = 100
+                    self.progress.grid_remove()
                     self._update_buttons()
                     if self.results:
                         self.status_var.set(

@@ -155,3 +155,106 @@ class DialogSafetyTests(NoDialogs, unittest.TestCase):
         self.assertTrue(self.dialogs, "no dialog was raised")
         self.assertEqual(self.dialogs[0][0], "showerror")
         self.assertFalse(self.app.scanning)
+
+
+@unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
+class PresentationTests(NoDialogs, unittest.TestCase):
+    """
+    The parts of the window that carry meaning rather than decoration.
+    """
+
+    def setUp(self):
+        self.silence_dialogs()
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        self.app = appmod.App(self.root)
+
+    def result(self, name="photo.jpg", chance=100,
+               check=None):
+        return ntfs.DeletedFile(name=name, path="Photos", size=1234,
+                                chance=chance, runs=[(1, 1)], is_dir=False,
+                                content_check=check or signatures.MATCH)
+
+    def test_an_empty_table_explains_itself(self):
+        """A blank white rectangle says nothing about what happened."""
+        self.assertTrue(self.app.empty_title.get())
+        self.assertTrue(self.app.empty.winfo_manager(),
+                        "the empty state is not shown when there is nothing")
+
+    def test_the_empty_state_goes_away_once_there_are_results(self):
+        self.app._add([self.result()])
+        self.assertFalse(self.app.empty.winfo_manager())
+
+    def test_a_search_that_matches_nothing_says_so_specifically(self):
+        self.app._add([self.result()])
+        self.app._placeholder_on = False
+        self.app.search_var.set("nothing-like-this")
+        self.assertTrue(self.app.empty.winfo_manager())
+        self.assertIn("search", self.app.empty_title.get().lower())
+
+    def test_the_search_placeholder_is_not_treated_as_a_search(self):
+        """
+        Tk has no placeholder, so it is real text in the box. If the filter
+        took it literally, the results would vanish before anyone typed.
+        """
+        self.app._add([self.result()])
+        self.assertEqual(self.app.search_entry.get(), self.app._placeholder)
+        self.assertEqual(len(self.app.visible), 1,
+                         "the placeholder was filtered against")
+
+    def test_the_drive_path_is_shown_apart_from_the_label(self):
+        """
+        The rail is too narrow for the full label, and the device path is the
+        part that identifies the drive - so it gets its own line.
+        """
+        if not self.app.volumes:
+            self.skipTest("no drives on this machine")
+        label, path = self.app.volumes[0]
+        self.assertNotIn(path, self.app._short_label(label))
+        self.assertEqual(self.app.drive_detail.get(), path)
+
+    def test_the_selected_drive_still_resolves_to_its_device(self):
+        if not self.app.volumes:
+            self.skipTest("no drives on this machine")
+        self.assertEqual(self.app._source_path(), self.app.volumes[0][1])
+
+    def test_progress_is_hidden_when_nothing_is_running(self):
+        self.assertFalse(self.app.progress.winfo_manager())
+
+    def test_a_button_is_bound_for_keyboard_use(self):
+        """
+        A hand-drawn button still has to behave like one: reachable by Tab,
+        and pressed by Space or Return.
+
+        Only the parts that are ours are asserted - that the bindings are
+        registered and that takefocus is set. Whether Tk then delivers a
+        keypress is Tk's business, and testing it needs a mapped, focused,
+        on-screen window, which is a lot of flashing for no extra confidence.
+        """
+        button = appmod.PillButton(self.root, "Go", command=lambda: None)
+        self.assertTrue(button.cget("takefocus"))
+        bound = button.bind()
+        for sequence in ("<Key-Return>", "<Key-space>", "<Button-1>"):
+            self.assertIn(sequence, bound, f"{sequence} is not bound")
+
+    def test_pressing_a_button_runs_its_command(self):
+        pressed = []
+        button = appmod.PillButton(self.root, "Go",
+                                   command=lambda: pressed.append(True))
+        button._press(None)
+        self.assertEqual(len(pressed), 1)
+
+    def test_a_disabled_button_does_nothing_when_pressed(self):
+        pressed = []
+        button = appmod.PillButton(self.root, "Go",
+                                   command=lambda: pressed.append(True))
+        button["state"] = "disabled"
+        button._press(None)
+        self.assertEqual(pressed, [],
+                         "a disabled button ran its command anyway")
+
+    def test_the_mode_control_drives_the_variable(self):
+        self.app.mode_var.set("undelete")
+        self.assertTrue(self.app.types_row.winfo_manager() == "",
+                        "file types are only meaningful for deep scan")
