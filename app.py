@@ -330,6 +330,16 @@ class Dropdown(tk.Canvas):
         self.bind("<Enter>", lambda e: self._draw(hover=True))
         self.bind("<Leave>", lambda e: self._draw())
         textvariable.trace_add("write", lambda *_: self._draw())
+        # Bound once for the life of the widget, not once per open. Tk keeps
+        # every `add="+"` binding forever, so binding on each open left a
+        # stale handler behind: the next click on the box ran the widget
+        # binding that opens the popup and then the leftover toplevel binding
+        # that closes it, and the drive list stopped opening at all after the
+        # first drive had been picked.
+        top = self.winfo_toplevel()
+        top.bind("<Button-1>", self._click_elsewhere, add="+")
+        top.bind("<Escape>", lambda e: self._close(), add="+")
+        top.bind("<Configure>", self._window_moved, add="+")
 
     # -- closed state -------------------------------------------------------
     def _draw(self, hover=False):
@@ -375,16 +385,28 @@ class Dropdown(tk.Canvas):
             row.bind("<Leave>", lambda e, r=row: r.configure(background=PANEL))
             row.bind("<Button-1>", lambda e, v=value: self._choose(v))
 
+        popup.lift()
         self._popup = popup
-        popup.bind("<Escape>", lambda e: self._close())
-        popup.grab_set()
-        popup.bind("<Button-1>", lambda e: None)
-        self.winfo_toplevel().bind("<Button-1>", lambda e: self._close(),
-                                   add="+")
+
+    # No grab while the list is open. A local grab makes Tk discard every
+    # click outside the popup, so clicking anywhere else in the window did
+    # nothing at all - the list stayed up and the app looked frozen. Letting
+    # the clicks through and closing on them is what a menu does anyway.
+    def _click_elsewhere(self, event):
+        """Close the open list when the click lands anywhere but this box."""
+        # The click that opens the popup travels on to the toplevel too;
+        # acting on that one would make the list flash and vanish.
+        if self._popup and event.widget is not self:
+            self._close()
+
+    def _window_moved(self, event):
+        # The popup is its own window at fixed screen coordinates, so it
+        # would sit where the list used to be if the window moved or resized.
+        if self._popup and event.widget is self.winfo_toplevel():
+            self._close()
 
     def _close(self):
         if self._popup:
-            self._popup.grab_release()
             self._popup.destroy()
             self._popup = None
 

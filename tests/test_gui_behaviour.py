@@ -375,6 +375,73 @@ class DrawnWidgetTests(unittest.TestCase):
         drop._choose("two")
         self.assertEqual(heard, ["two"])
 
+    def show_window(self):
+        """
+        Tk does not deliver a synthetic click to a window that is not on the
+        screen, so any test that clicks rather than calling a method has to
+        put the window up first. The other tests keep it withdrawn.
+        """
+        self.root.geometry("240x120+80+80")
+        self.root.deiconify()
+        self.root.update()
+
+    def test_the_dropdown_opens_again_after_a_choice(self):
+        """
+        The bug this covers: the list opened once, and every click on the box
+        after the first drive had been picked did nothing. Picking a drive,
+        scanning, then wanting to look at another drive is the ordinary way
+        this tool is used, so the box has to survive being used.
+        """
+        var = tk.StringVar()
+        drop = appmod.Dropdown(self.root, textvariable=var)
+        drop.pack()
+        drop["values"] = ["first", "second"]
+        self.show_window()
+        for _ in range(3):
+            drop.event_generate("<Button-1>", x=10, y=10)
+            self.root.update()
+            self.assertIsNotNone(drop._popup, "the list stopped opening")
+            drop._choose("second")
+            self.root.update()
+            self.assertIsNone(drop._popup)
+
+    def test_a_click_elsewhere_closes_the_open_list(self):
+        """
+        And leaves the rest of the window usable. While the popup held a
+        grab, Tk threw away every click outside it, so the window looked
+        frozen until something was picked.
+        """
+        var = tk.StringVar()
+        drop = appmod.Dropdown(self.root, textvariable=var)
+        drop.pack()
+        elsewhere = tk.Label(self.root, text="not the dropdown")
+        elsewhere.pack()
+        drop["values"] = ["first", "second"]
+        self.show_window()
+
+        drop.event_generate("<Button-1>", x=10, y=10)
+        self.root.update()
+        self.assertIsNotNone(drop._popup)
+        elsewhere.event_generate("<Button-1>", x=2, y=2)
+        self.root.update()
+        self.assertIsNone(drop._popup)
+
+        drop.event_generate("<Button-1>", x=10, y=10)
+        self.root.update()
+        self.assertIsNotNone(drop._popup, "closing it must not disable it")
+
+    def test_escape_closes_the_open_list(self):
+        var = tk.StringVar()
+        drop = appmod.Dropdown(self.root, textvariable=var)
+        drop.pack()
+        drop["values"] = ["first", "second"]
+        self.show_window()
+        drop.event_generate("<Button-1>", x=10, y=10)
+        self.root.update()
+        self.root.event_generate("<Escape>")
+        self.root.update()
+        self.assertIsNone(drop._popup)
+
     def test_choosing_updates_the_drive_detail_in_the_window(self):
         app = appmod.App(self.root)
         if len(app.volumes) < 2:
