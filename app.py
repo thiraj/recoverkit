@@ -342,6 +342,12 @@ class App:
         self._build_sidebar()
         self._build_main()
 
+        # Wired last, deliberately. Inserting the placeholder writes to this
+        # variable, and a filter that runs while the window is still being
+        # assembled reaches for widgets that do not exist yet. Tk swallows the
+        # exception and carries on, so it fails silently.
+        self.search_var.trace_add("write", lambda *_: self._apply_filter())
+
     def _build_sidebar(self):
         """
         The settings rail. Everything you choose before scanning lives here,
@@ -487,7 +493,6 @@ class App:
         bar.grid(row=1, column=0, sticky="we", padx=26, pady=(14, 10))
         bar.columnconfigure(0, weight=1)
         self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._apply_filter())
         entry = ttk.Entry(bar, textvariable=self.search_var,
                           font=self.font_body, foreground=FAINT)
         entry.grid(row=0, column=0, sticky="we")

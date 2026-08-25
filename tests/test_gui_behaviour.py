@@ -258,3 +258,58 @@ class PresentationTests(NoDialogs, unittest.TestCase):
         self.app.mode_var.set("undelete")
         self.assertTrue(self.app.types_row.winfo_manager() == "",
                         "file types are only meaningful for deep scan")
+
+
+@unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
+class StartupTests(unittest.TestCase):
+    """
+    Tk reports an exception raised inside a callback and then carries on, so
+    a broken callback leaves a working-looking window and a line of output
+    nobody reads.
+
+    Building the window fired the search filter before the widgets it reads
+    existed, and it went unnoticed exactly that way. This catches the whole
+    class of it.
+    """
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        self.raised = []
+        self.root.report_callback_exception = (
+            lambda exc, value, tb: self.raised.append(f"{exc.__name__}: {value}"))
+
+    def test_building_the_window_raises_nothing(self):
+        appmod.App(self.root)
+        self.root.update()
+        self.assertEqual(self.raised, [],
+                         "an exception was raised while building the window")
+
+    def test_typing_in_the_search_box_raises_nothing(self):
+        app = appmod.App(self.root)
+        app._placeholder_on = False
+        for text in ("a", "ab", "abc", ""):
+            app.search_var.set(text)
+            self.root.update()
+        self.assertEqual(self.raised, [])
+
+    def test_switching_mode_raises_nothing(self):
+        app = appmod.App(self.root)
+        for mode in ("carve", "undelete", "carve"):
+            app.mode_var.set(mode)
+            app._toggle_mode()
+            self.root.update()
+        self.assertEqual(self.raised, [])
+
+    def test_sorting_every_column_raises_nothing(self):
+        app = appmod.App(self.root)
+        app._add([ntfs.DeletedFile(name="a.jpg", path="P", size=1, chance=100,
+                                   runs=[(1, 1)], is_dir=False,
+                                   content_check=signatures.MATCH)])
+        for column in ("name", "folder", "size", "deleted", "chance",
+                       "condition"):
+            app._sort(column)
+            app._sort(column)
+            self.root.update()
+        self.assertEqual(self.raised, [])
