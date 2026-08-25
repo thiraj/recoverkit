@@ -423,7 +423,8 @@ class App:
             self.disk = disk
 
             if self.mode_var.get() == "undelete":
-                self.events.put(("status", "Reading the file table..."))
+                self.events.put(("status",
+                                 f"Reading the file table on {source}..."))
                 vol = self._open_volume(disk)
                 self.volume = vol
                 found = vol.scan(
@@ -433,7 +434,12 @@ class App:
             else:
                 self.volume = None
                 types = [t for t, v in self.type_vars.items() if v.get()]
-                self.events.put(("status", f"Deep scanning for {', '.join(types)}..."))
+                size = disk.size()
+                where = f"{human_size(size)} " if size else ""
+                self.events.put((
+                    "status",
+                    f"Deep scanning {where}of {source} for "
+                    f"{', '.join(types)}..."))
                 batch = []
                 for f in carve.scan(
                         disk, types,
@@ -700,6 +706,12 @@ class App:
                     done, total = payload
                     if total:
                         self.progress["value"] = min(100, done * 100 / total)
+                    elif done:
+                        # The drive would not say how big it is, so there is
+                        # no percentage to show. Report real movement rather
+                        # than a made-up fraction.
+                        self.status_var.set(
+                            f"Deep scanning... {human_size(done)} read so far")
                 elif kind == "error":
                     messagebox.showerror("Scan failed", payload)
                 elif kind == "done":

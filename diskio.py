@@ -49,6 +49,40 @@ class ReadOnlyDisk:
             raise FileNotFoundError(f"Device not found: {path}")
 
     # -- geometry -----------------------------------------------------------
+    # Asking a raw device how big it is. Seeking to the end works for a file
+    # and for most block devices, but a raw character device - /dev/rdiskN on
+    # macOS, which is the fast path we prefer - can answer zero. A zero size
+    # is not a harmless inaccuracy: the deep scan reports progress only when
+    # it knows the total, so the bar sits at nothing for the whole scan and
+    # the user is left watching an apparently endless job with no idea
+    # whether it is a minute or a day from finishing.
+    _DKIOCGETBLOCKSIZE = 0x40046418      # macOS, uint32
+    _DKIOCGETBLOCKCOUNT = 0x40086419     # macOS, uint64
+    _BLKGETSIZE64 = 0x80081272           # Linux, uint64
+
+    def _ioctl_size(self):
+        """Ask the driver directly. Returns 0 if it will not say."""
+        try:
+            import array
+            import fcntl
+        except ImportError:
+            return 0
+
+        try:
+            if sys.platform == "darwin":
+                block = array.array("I", [0])
+                count = array.array("Q", [0])
+                fcntl.ioctl(self._fd, self._DKIOCGETBLOCKSIZE, block, True)
+                fcntl.ioctl(self._fd, self._DKIOCGETBLOCKCOUNT, count, True)
+                return block[0] * count[0]
+            if sys.platform.startswith("linux"):
+                buf = array.array("Q", [0])
+                fcntl.ioctl(self._fd, self._BLKGETSIZE64, buf, True)
+                return buf[0]
+        except (OSError, AttributeError, ValueError):
+            return 0
+        return 0
+
     def size(self):
         if self._size is None:
             try:
@@ -56,7 +90,12 @@ class ReadOnlyDisk:
             except OSError:
                 self._size = 0
             finally:
-                os.lseek(self._fd, 0, os.SEEK_SET)
+                try:
+                    os.lseek(self._fd, 0, os.SEEK_SET)
+                except OSError:
+                    pass
+            if not self._size:
+                self._size = self._ioctl_size()
         return self._size
 
     # -- reading ------------------------------------------------------------

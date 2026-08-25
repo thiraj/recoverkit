@@ -147,6 +147,7 @@ class NoGuiImportsTests(unittest.TestCase):
             "ctypes", "string",          # Windows volume enumeration
             "subprocess", "plistlib",    # macOS volume enumeration (diskutil)
             "zlib",                      # PNG chunk checksums in verify.py
+            "array", "fcntl",            # asking a raw device its size
         }
         # Modules of this project are not dependencies.
         allowed |= {name[:-3] for name in os.listdir(root)

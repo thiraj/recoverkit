@@ -157,3 +157,39 @@ class DevicePathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeviceSizeTests(ImageTestCase):
+    """
+    A wrong answer here is not cosmetic. The deep scan only reports progress
+    when it knows how big the drive is, so a size of zero leaves the bar
+    frozen for the whole scan with no way to tell a five-minute job from an
+    all-day one.
+    """
+
+    def setUp(self):
+        self.use_image(b"z" * 8192)
+
+    def test_size_of_a_regular_file(self):
+        with self.open_disk() as disk:
+            self.assertEqual(disk.size(), 8192)
+
+    def test_the_answer_is_cached_not_recomputed(self):
+        with self.open_disk() as disk:
+            self.assertEqual(disk.size(), disk.size())
+
+    def test_asking_the_size_leaves_reads_working(self):
+        """size() seeks to the end; reading afterwards must still be right."""
+        with self.open_disk() as disk:
+            disk.size()
+            self.assertEqual(disk.read(0, 4), b"zzzz")
+            self.assertEqual(disk.read(8188, 8), b"zzzz")
+
+    def test_the_ioctl_fallback_declines_politely_on_a_plain_file(self):
+        """
+        A regular file has no block-device driver to ask. The fallback must
+        return zero rather than raising - it is a last resort, not a
+        precondition.
+        """
+        with self.open_disk() as disk:
+            self.assertEqual(disk._ioctl_size(), 0)

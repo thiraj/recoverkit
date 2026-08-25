@@ -114,5 +114,9 @@ def scan(disk, types, progress=None, should_stop=None, limit_bytes=None):
         carry = buf[-max_sig:] if len(buf) >= max_sig else buf
         base_of_carry = offset + len(chunk) - len(carry)
 
-        if progress and total:
-            progress(offset, total)
+        if progress:
+            # `total` is 0 when the drive will not say how big it is. Pass it
+            # through as 0 rather than inventing a denominator - the caller
+            # can report bytes scanned instead of a percentage, which is
+            # honest, where a bar pinned at 100% for an hour is not.
+            progress(offset + len(chunk), total)
