@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import carve
 import exfat
+import fat32
 import ntfs
 from tests import exfat_image, ntfs_image
 from tests.support import ImageTestCase
@@ -28,27 +29,32 @@ class VolumeInterfaceTests(unittest.TestCase):
                 cls, inspect.isfunction) if not name.startswith("_")}
 
         self.assertEqual(public(exfat.ExfatVolume), public(ntfs.NtfsVolume))
+        self.assertEqual(public(fat32.Fat32Volume), public(ntfs.NtfsVolume))
 
     def test_scan_takes_the_same_arguments(self):
-        self.assertEqual(
-            inspect.signature(exfat.ExfatVolume.scan),
-            inspect.signature(ntfs.NtfsVolume.scan))
+        for engine in (exfat.ExfatVolume, fat32.Fat32Volume):
+            self.assertEqual(inspect.signature(engine.scan),
+                             inspect.signature(ntfs.NtfsVolume.scan),
+                             engine.__name__)
 
     def test_read_file_takes_the_same_arguments(self):
-        self.assertEqual(
-            inspect.signature(exfat.ExfatVolume.read_file),
-            inspect.signature(ntfs.NtfsVolume.read_file))
+        for engine in (exfat.ExfatVolume, fat32.Fat32Volume):
+            self.assertEqual(inspect.signature(engine.read_file),
+                             inspect.signature(ntfs.NtfsVolume.read_file),
+                             engine.__name__)
 
     def test_both_are_constructed_from_a_disk_alone(self):
-        for cls in (exfat.ExfatVolume, ntfs.NtfsVolume):
+        for cls in (exfat.ExfatVolume, fat32.Fat32Volume, ntfs.NtfsVolume):
             parameters = list(
                 inspect.signature(cls.__init__).parameters)
             self.assertEqual(parameters, ["self", "disk"])
 
     def test_both_expose_the_geometry_the_gui_reads(self):
         for attribute in ("sector_size", "cluster_size", "total_clusters"):
-            self.assertIn(attribute, ntfs.NtfsVolume.__init__.__code__.co_names)
-            self.assertIn(attribute, exfat.ExfatVolume.__init__.__code__.co_names)
+            for engine in (ntfs.NtfsVolume, exfat.ExfatVolume,
+                           fat32.Fat32Volume):
+                self.assertIn(attribute, engine.__init__.__code__.co_names,
+                              engine.__name__)
 
 
 class ResultInterfaceTests(unittest.TestCase):
@@ -60,15 +66,23 @@ class ResultInterfaceTests(unittest.TestCase):
     GUI_FIELDS = ("name", "path", "size", "chance", "deleted_at",
                   "created_at", "is_dir", "extension")
 
-    def test_ntfs_and_exfat_results_have_the_same_fields(self):
-        self.assertEqual(
-            set(ntfs.DeletedFile.__slots__) - {"assumed_contiguous"},
-            set(exfat.DeletedFile.__slots__) - {"assumed_contiguous"})
+    def test_every_engine_result_has_the_same_core_fields(self):
+        """
+        Extras are allowed - exFAT and FAT32 both need to say when a layout
+        was assumed, and FAT32 alone can lose a filename's first letter. The
+        fields the interface reads must be identical.
+        """
+        extras = {"assumed_contiguous", "first_letter_lost"}
+        core = set(ntfs.DeletedFile.__slots__) - extras
+        for engine in (exfat.DeletedFile, fat32.DeletedFile):
+            self.assertEqual(set(engine.__slots__) - extras, core,
+                             engine.__module__)
 
     def test_every_result_type_has_what_the_gui_reads(self):
         results = [
             ntfs.DeletedFile(name="a.txt", size=1, runs=[], chance=100),
             exfat.DeletedFile(name="a.txt", size=1, runs=[], chance=100),
+            fat32.DeletedFile(name="a.txt", size=1, runs=[], chance=100),
             carve.CarvedFile("recovered_jpg_00001.jpg", "jpg", 0, 1),
         ]
         for result in results:
@@ -127,8 +141,8 @@ class NoGuiImportsTests(unittest.TestCase):
 
     def test_engines_do_not_import_the_gui(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for module in ("ntfs.py", "exfat.py", "carve.py", "diskio.py",
-                       "signatures.py", "verify.py"):
+        for module in ("ntfs.py", "exfat.py", "fat32.py", "carve.py",
+                       "diskio.py", "signatures.py", "verify.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 source = fh.read()
             for banned in ("import tkinter", "from tkinter", "import app"):
@@ -155,9 +169,9 @@ class NoGuiImportsTests(unittest.TestCase):
         # Modules of this project are not dependencies.
         allowed |= {name[:-3] for name in os.listdir(root)
                     if name.endswith(".py")}
-        for module in ("ntfs.py", "exfat.py", "carve.py", "diskio.py",
-                       "signatures.py", "verify.py", "recovery.py",
-                       "service.py"):
+        for module in ("ntfs.py", "exfat.py", "fat32.py", "carve.py",
+                       "diskio.py", "signatures.py", "verify.py",
+                       "recovery.py", "service.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
@@ -180,7 +194,8 @@ class SourceOpeningTests(unittest.TestCase):
         # recovery.py and service.py open files in the *destination*, which
         # is their job - the rule is that nothing but diskio.py may open a
         # source device, not that nothing may open anything.
-        for module in ("ntfs.py", "exfat.py", "carve.py", "signatures.py"):
+        for module in ("ntfs.py", "exfat.py", "fat32.py", "carve.py",
+                       "signatures.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 for number, line in enumerate(fh, 1):
                     code = line.split("#")[0]

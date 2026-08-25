@@ -51,6 +51,13 @@ diskio.py   Read-only raw device access. Sector-aligned reads (Windows
 ntfs.py     NTFS Master File Table parser. The undelete engine: recovers
             real filenames, folder paths, sizes, timestamps, and cluster
             maps. Scores recoverability against the $Bitmap.
+fat32.py    FAT32 directory parser. The third undelete engine, and the one
+            that matters most for cameras: nearly every SD card of 32GB or
+            less is FAT32. Loses more on a delete than the others - the 8.3
+            name's first letter is overwritten by the free-slot marker and
+            the cluster chain is zeroed - so long names carry the filename
+            and every multi-cluster file is flagged `assumed_contiguous`.
+            Same interface as ntfs.py.
 exfat.py    exFAT directory parser. The second undelete engine, for memory
             cards, phones and USB sticks. Same public interface as ntfs.py
             (ExfatVolume(disk) / .scan() / .read_file()) so app.py can use
@@ -133,9 +140,15 @@ if any module other than diskio.py starts opening devices.
 
 ## Known limits (documented, not bugs)
 
-- Undelete covers NTFS and exFAT. APFS is copy-on-write and encrypted by
-  default, making undelete effectively impossible; ext4 undelete is not
+- Undelete covers NTFS, exFAT and FAT32. APFS is copy-on-write and encrypted
+  by default, making undelete effectively impossible; ext4 undelete is not
   implemented. Mac/Linux internal drives get deep-scan mode only.
+- FAT12/FAT16 are not handled. `fat32.py` rejects them deliberately (their
+  root directory is a fixed region rather than a cluster chain); the entry
+  parsing would mostly transfer if someone wants small or very old cards.
+- On FAT32 a file with no long name has lost the first letter of its name for
+  good. It is shown with a `_` stand-in and `first_letter_lost` set. Do not
+  "helpfully" guess it.
 - exFAT can only recover a fragmented deleted file's first run for certain -
   the FAT chain is cleared on delete. The rest is assumed contiguous and
   flagged as such.

@@ -17,7 +17,7 @@ through thousands of `recovered_00001.jpg` files.
 
 | Mode | What you get | Works on |
 |---|---|---|
-| **Undelete** | Real filenames, original folder paths, deletion dates, exact sizes, and an honest recovery-chance score. Handles fragmented files correctly. | **NTFS** — Windows drives, and NTFS USB/external disks plugged into a Mac or Linux box. **exFAT** — SD cards, camera cards, phones, most large USB sticks |
+| **Undelete** | Real filenames, original folder paths, deletion dates, exact sizes, and an honest recovery-chance score. Handles fragmented files correctly. | **NTFS** — Windows drives and external disks. **exFAT** — larger SD cards, phones, most USB sticks. **FAT32** — camera cards and anything 32GB or under |
 | **Deep scan** | Files rebuilt from their content signatures. No names or folders, and no way to tell whether a file is whole — scores are capped accordingly. | Any drive: APFS, HFS+, ext4, FAT32, SD cards, cameras |
 
 Use **Undelete** first — RecoverKit picks the right engine for the drive on its
@@ -187,6 +187,11 @@ with diskio.ReadOnlyDisk("/dev/rdisk2") as disk:
 - Undelete covers NTFS and exFAT. APFS (Mac) and ext4 (Linux) undelete is not
   implemented — APFS in particular is copy-on-write and encrypted by default,
   which makes it effectively impossible.
+- On FAT32, deleting a file overwrites the first letter of its short name
+  and erases the record of where the file continued. Long filenames survive
+  and are what you see; files stored in one piece come back exactly; anything
+  longer is recovered on the assumption it was contiguous, and scored no
+  higher than 50% because that is a guess.
 - On exFAT, a deleted file that was stored in one piece comes back exactly.
   A deleted file that was *fragmented* has lost the record of where its later
   pieces went, so RecoverKit assumes it ran on contiguously and caps its score

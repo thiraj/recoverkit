@@ -22,6 +22,7 @@ import recovery
 import signatures
 import verify
 from exfat import ExfatVolume
+from fat32 import Fat32Volume
 from ntfs import NtfsVolume
 
 APP_NAME = "RecoverKit"
@@ -1022,10 +1023,14 @@ class App:
         try:
             return ExfatVolume(disk)
         except ValueError:
+            pass
+        try:
+            return Fat32Volume(disk)
+        except ValueError:
             raise ValueError(
                 "This drive isn't formatted in a way we can undelete from. "
-                "Undelete works on Windows drives (NTFS) and on memory cards "
-                "and USB sticks (exFAT).")
+                "Undelete works on Windows drives (NTFS) and on memory cards, "
+                "camera cards and USB sticks (exFAT and FAT32).")
 
     def _worker(self, source):
         try:

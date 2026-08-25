@@ -53,6 +53,7 @@ import diskio
 import recovery
 import verify
 from exfat import ExfatVolume
+from fat32 import Fat32Volume
 from ntfs import NtfsVolume
 
 VERSION = "1.0"
@@ -178,7 +179,12 @@ class Service:
         try:
             self.volume = NtfsVolume(self.disk)
         except ValueError:
-            self.volume = ExfatVolume(self.disk)   # its message reaches the user
+            try:
+                self.volume = ExfatVolume(self.disk)
+            except ValueError:
+                # Its message is the one that reaches the user, so FAT32 goes
+                # last: "not FAT32" is the least helpful of the three.
+                self.volume = Fat32Volume(self.disk)
         results = self.volume.scan(
             progress=lambda done, total: self.emit(
                 event="progress", done=done, total=total),
