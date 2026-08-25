@@ -214,8 +214,10 @@ Two things about these tests are not obvious and cost real debugging time:
 
 ## Roadmap
 
-- Port the GUI to Tauri (Rust + web frontend) for a modern look. Keep
-  `ntfs.py` / `exfat.py` / `carve.py` as the engines, or port them to Rust.
+- Port the GUI to Tauri (Rust + web frontend) for a modern look. Keep the
+  engines in Python - see `PORTING.md`, which argues that at some length and
+  sketches the phases. Short version: the engines are not the dated part, and
+  rewriting them discards the test suite that proves the safety invariant.
 - FAT32 undelete — the last common camera/card format not covered. The
   directory-entry shape is different enough to need its own module, but
   `exfat.py` is the closer template.
