@@ -14,7 +14,7 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 import carve
 import diskio
@@ -26,16 +26,43 @@ from ntfs import NtfsVolume
 APP_NAME = "RecoverKit"
 VERSION = "1.0"
 
-# Palette - kept deliberately calm and legible.
-BG = "#f6f7f9"
+# Palette. Flat, high-contrast, one accent colour doing all the work - the
+# house style of the developer tools people are used to looking at.
+BG = "#ffffff"          # the working surface
+SIDEBAR = "#f6f8fa"     # the settings rail down the left
 PANEL = "#ffffff"
-INK = "#1c1f23"
-MUTED = "#6b7280"
-ACCENT = "#2563eb"
-GOOD = "#15803d"
-WARN = "#b45309"
-BAD = "#b91c1c"
-LINE = "#e2e5ea"
+INK = "#16202c"         # primary text
+MUTED = "#69778a"       # labels and secondary text
+FAINT = "#8c97a5"
+ACCENT = "#1d63ed"
+ACCENT_DEEP = "#1550c8"  # hover
+ACCENT_SOFT = "#e8f0fe"  # selection wash
+GOOD = "#0f7b46"
+WARN = "#9a5b06"
+BAD = "#c0342c"
+LINE = "#e3e8ee"
+STRIPE = "#fafbfc"
+DISABLED = "#c3ccd8"
+
+
+def _first_font(root, candidates, size, weight="normal"):
+    """
+    Pick the first font actually installed.
+
+    Naming a font that is not present does not fail loudly - Tk quietly
+    substitutes something, usually of a completely different weight. Asking
+    the font system what exists keeps the window looking the same on the
+    machines it is meant to run on.
+    """
+    try:
+        available = set(tkfont.families(root))
+    except Exception:
+        available = set()
+    for name in candidates:
+        if name in available:
+            return (name, size, weight) if weight != "normal" else (name, size)
+    return ("TkDefaultFont", size, weight) if weight != "normal" \
+        else ("TkDefaultFont", size)
 
 
 def human_size(n):
@@ -50,6 +77,144 @@ def human_size(n):
 
 def human_date(dt):
     return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
+
+
+def _round_rect(canvas, x1, y1, x2, y2, radius, **kw):
+    """A rounded rectangle, which Tk has no primitive for."""
+    radius = max(0, min(radius, (x2 - x1) // 2, (y2 - y1) // 2))
+    points = [
+        x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+        x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+        x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, **kw)
+
+
+class PillButton(tk.Canvas):
+    """
+    A flat rounded button.
+
+    ttk cannot round a corner on any platform's native theme, and a square
+    grey button is the single thing that makes an application look a decade
+    old. Drawing it on a canvas costs about forty lines and is the difference
+    between "a Python script" and "an application".
+
+    Supports `widget["state"]` in both directions so the rest of the app can
+    treat it exactly like a ttk.Button.
+    """
+
+    HEIGHT = 34
+    RADIUS = 8
+
+    def __init__(self, master, text, command=None, kind="primary",
+                 width=None, font=None, **kw):
+        self.kind = kind
+        self.command = command
+        self._state = "normal"
+        self._text = text
+        self._font = font or ("TkDefaultFont", 12)
+
+        measure = tkfont.Font(font=self._font)
+        self._width = width or measure.measure(text) + 34
+        background = kw.pop("background", None) or (
+            SIDEBAR if kind == "sidebar" else BG)
+
+        super().__init__(master, width=self._width, height=self.HEIGHT,
+                         highlightthickness=0, bd=0, background=background,
+                         cursor="arrow", **kw)
+        self._draw()
+        self.bind("<Button-1>", self._press)
+        self.bind("<Enter>", lambda e: self._draw(hover=True))
+        self.bind("<Leave>", lambda e: self._draw())
+
+    # -- appearance ---------------------------------------------------------
+    def _colours(self, hover):
+        if self._state == "disabled":
+            if self.kind == "primary":
+                return DISABLED, "#ffffff", DISABLED
+            return BG, DISABLED, LINE
+        if self.kind == "primary":
+            fill = ACCENT_DEEP if hover else ACCENT
+            return fill, "#ffffff", fill
+        if self.kind == "danger":
+            return (BG, BAD, BAD)
+        return ((ACCENT_SOFT if hover else BG), INK, LINE)
+
+    def _draw(self, hover=False):
+        self.delete("all")
+        fill, ink, outline = self._colours(hover)
+        _round_rect(self, 1, 1, self._width - 1, self.HEIGHT - 1, self.RADIUS,
+                    fill=fill, outline=outline)
+        self.create_text(self._width // 2, self.HEIGHT // 2, text=self._text,
+                         fill=ink, font=self._font)
+
+    # -- behaviour ----------------------------------------------------------
+    def _press(self, _event):
+        if self._state != "disabled" and self.command:
+            self.command()
+
+    def configure(self, **kw):
+        if "state" in kw:
+            self._state = str(kw.pop("state"))
+            self._draw()
+        if "text" in kw:
+            self._text = kw.pop("text")
+            self._draw()
+        if kw:
+            super().configure(**kw)
+
+    config = configure
+
+    def __setitem__(self, key, value):
+        if key in ("state", "text"):
+            self.configure(**{key: value})
+        else:
+            super().__setitem__(key, value)
+
+    def __getitem__(self, key):
+        if key == "state":
+            return self._state
+        if key == "text":
+            return self._text
+        return super().__getitem__(key)
+
+
+class Segmented(tk.Frame):
+    """
+    A two-option segmented control, bound to a StringVar.
+
+    Two radio buttons say "here are two settings". A segmented control says
+    "this application is in one of two modes", which is what choosing between
+    Undelete and Deep scan actually is.
+    """
+
+    def __init__(self, master, variable, options, command=None, **kw):
+        super().__init__(master, background=SIDEBAR, **kw)
+        self.variable = variable
+        self.command = command
+        self._buttons = {}
+        font = _first_font(master, ["SF Pro Text", "Segoe UI", "Inter",
+                                    "DejaVu Sans"], 11)
+        for index, (value, label) in enumerate(options):
+            button = PillButton(self, label, kind="ghost", font=font,
+                                background=SIDEBAR,
+                                command=lambda v=value: self._choose(v))
+            button.grid(row=index, column=0, sticky="we", pady=(0, 6))
+            self.columnconfigure(0, weight=1)
+            self._buttons[value] = button
+        self._paint()
+
+    def _choose(self, value):
+        self.variable.set(value)
+        self._paint()
+        if self.command:
+            self.command()
+
+    def _paint(self):
+        chosen = self.variable.get()
+        for value, button in self._buttons.items():
+            button.kind = "primary" if value == chosen else "ghost"
+            button._draw()
 
 
 # What the Condition column says. Blank where we have no opinion - an
@@ -81,6 +246,9 @@ class App:
         self.disk = None
         self.sort_column = None
         self.sort_reverse = False
+        self.status_var = tk.StringVar(value="Ready.")
+        self.subtitle_var = tk.StringVar(
+            value="Pick a drive and press Start scan.")
 
         self._style()
         self._build()
@@ -96,169 +264,267 @@ class App:
         except tk.TclError:
             pass
 
-        s.configure(".", background=BG, foreground=INK,
-                    font=("Segoe UI", 10) if sys.platform == "win32"
-                    else ("SF Pro Text", 12) if sys.platform == "darwin"
-                    else ("DejaVu Sans", 10))
-        s.configure("Card.TFrame", background=PANEL, relief="flat")
-        s.configure("Header.TLabel", background=BG, foreground=INK,
-                    font=("Segoe UI Semibold", 17) if sys.platform == "win32"
-                    else ("SF Pro Display", 19))
-        s.configure("Sub.TLabel", background=BG, foreground=MUTED)
-        s.configure("Field.TLabel", background=PANEL, foreground=MUTED)
-        s.configure("Accent.TButton", background=ACCENT, foreground="white",
-                    borderwidth=0, padding=(16, 8))
-        s.map("Accent.TButton", background=[("active", "#1d4ed8"),
-                                            ("disabled", "#9db4e8")])
-        s.configure("TButton", padding=(12, 6))
+        self.font_body = _first_font(
+            self.root, ["SF Pro Text", "Segoe UI", "Inter", "DejaVu Sans"], 12)
+        self.font_small = _first_font(
+            self.root, ["SF Pro Text", "Segoe UI", "Inter", "DejaVu Sans"], 11)
+        self.font_title = _first_font(
+            self.root, ["SF Pro Display", "Segoe UI Semibold", "Inter",
+                        "DejaVu Sans"], 20, "bold")
+        self.font_section = _first_font(
+            self.root, ["SF Pro Text", "Segoe UI Semibold", "Inter",
+                        "DejaVu Sans"], 10, "bold")
+        self.font_mono = _first_font(
+            self.root, ["SF Mono", "Menlo", "Consolas", "DejaVu Sans Mono"], 11)
+
+        s.configure(".", background=BG, foreground=INK, font=self.font_body)
+        s.configure("TFrame", background=BG)
+        s.configure("Side.TFrame", background=SIDEBAR)
+        s.configure("Card.TFrame", background=PANEL)
+
+        s.configure("TLabel", background=BG, foreground=INK)
+        s.configure("Side.TLabel", background=SIDEBAR, foreground=INK)
+        s.configure("Title.TLabel", background=BG, foreground=INK,
+                    font=self.font_title)
+        s.configure("Sub.TLabel", background=BG, foreground=MUTED,
+                    font=self.font_small)
+        # Section headings in the rail: small, upper case, quiet.
+        s.configure("Section.TLabel", background=SIDEBAR, foreground=FAINT,
+                    font=self.font_section)
+        s.configure("Field.TLabel", background=SIDEBAR, foreground=MUTED,
+                    font=self.font_small)
+        s.configure("Status.TLabel", background=BG, foreground=MUTED,
+                    font=self.font_small)
+
+        s.configure("TEntry", fieldbackground=PANEL, borderwidth=1,
+                    relief="solid", padding=6)
+        s.map("TEntry", bordercolor=[("focus", ACCENT), ("!focus", LINE)])
+        s.configure("TCombobox", fieldbackground=PANEL, background=PANEL,
+                    borderwidth=1, relief="solid", padding=5,
+                    arrowsize=14)
+        s.map("TCombobox", bordercolor=[("focus", ACCENT), ("!focus", LINE)],
+              fieldbackground=[("readonly", PANEL)])
+
+        s.configure("TCheckbutton", background=SIDEBAR, foreground=INK,
+                    font=self.font_small)
+        s.map("TCheckbutton", background=[("active", SIDEBAR)])
+        s.configure("Main.TCheckbutton", background=BG, foreground=INK,
+                    font=self.font_small)
+        s.map("Main.TCheckbutton", background=[("active", BG)])
+
         s.configure("Treeview", background=PANEL, fieldbackground=PANEL,
-                    rowheight=26, borderwidth=0)
-        s.configure("Treeview.Heading", background="#eef0f4", relief="flat",
-                    padding=(8, 6))
-        s.map("Treeview", background=[("selected", "#dbeafe")],
+                    foreground=INK, rowheight=30, borderwidth=0,
+                    font=self.font_body)
+        s.configure("Treeview.Heading", background=BG, foreground=MUTED,
+                    relief="flat", borderwidth=0, padding=(10, 9),
+                    font=self.font_small)
+        s.map("Treeview.Heading", background=[("active", STRIPE)])
+        s.map("Treeview", background=[("selected", ACCENT_SOFT)],
               foreground=[("selected", INK)])
 
+        s.configure("Thin.Horizontal.TProgressbar", troughcolor=LINE,
+                    background=ACCENT, borderwidth=0, thickness=4)
+
+    # -- the window ---------------------------------------------------------
     def _build(self):
-        outer = ttk.Frame(self.root, padding=(18, 14))
-        outer.pack(fill="both", expand=True)
-        outer.rowconfigure(2, weight=1)
-        outer.columnconfigure(0, weight=1)
+        self.root.configure(bg=BG)
+        self.root.columnconfigure(1, weight=1)
+        self.root.rowconfigure(0, weight=1)
 
-        # --- header
-        head = ttk.Frame(outer)
-        head.grid(row=0, column=0, sticky="we", pady=(0, 12))
-        ttk.Label(head, text=APP_NAME, style="Header.TLabel").pack(side="left")
-        ttk.Label(head, text="   Read-only recovery. Your existing files are "
-                             "never touched.",
-                  style="Sub.TLabel").pack(side="left", padx=(6, 0))
+        self._build_sidebar()
+        self._build_main()
 
-        # --- settings card
-        card = ttk.Frame(outer, style="Card.TFrame", padding=14)
-        card.grid(row=1, column=0, sticky="we", pady=(0, 12))
-        card.columnconfigure(1, weight=1)
-        card.columnconfigure(4, weight=1)
+    def _build_sidebar(self):
+        """
+        The settings rail. Everything you choose before scanning lives here,
+        which leaves the whole of the rest of the window for results - the
+        part people actually spend their time reading.
+        """
+        rail = tk.Frame(self.root, background=SIDEBAR, width=278)
+        rail.grid(row=0, column=0, sticky="nsw")
+        rail.grid_propagate(False)
+        rail.columnconfigure(0, weight=1)
 
-        ttk.Label(card, text="Drive to scan", style="Field.TLabel").grid(
-            row=0, column=0, sticky="w", padx=(0, 8))
-        drive_row = ttk.Frame(card, style="Card.TFrame")
-        drive_row.grid(row=0, column=1, sticky="w")
+        tk.Frame(self.root, background=LINE, width=1).grid(
+            row=0, column=0, sticky="nse")
+
+        pad = 20
+        row = 0
+
+        brand = tk.Frame(rail, background=SIDEBAR)
+        brand.grid(row=row, column=0, sticky="we", padx=pad, pady=(22, 4))
+        tk.Label(brand, text=APP_NAME, background=SIDEBAR, foreground=INK,
+                 font=self.font_title).pack(side="left")
+        tk.Label(brand, text=f"  {VERSION}", background=SIDEBAR,
+                 foreground=FAINT, font=self.font_small).pack(side="left",
+                                                              pady=(8, 0))
+        row += 1
+        tk.Label(rail, text="Read-only. Your files are never touched.",
+                 background=SIDEBAR, foreground=MUTED, font=self.font_small,
+                 wraplength=238, justify="left").grid(
+            row=row, column=0, sticky="w", padx=pad, pady=(0, 18))
+        row += 1
+
+        # --- drive
+        ttk.Label(rail, text="DRIVE", style="Section.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad)
+        row += 1
         self.volumes = []
         self.drive_var = tk.StringVar()
-        self.drive_box = ttk.Combobox(
-            drive_row, textvariable=self.drive_var, state="readonly", width=76)
-        self.drive_box.pack(side="left")
-        ttk.Button(drive_row, text="Refresh", width=8,
-                   command=self._refresh_drives).pack(side="left", padx=(6, 0))
-        self._refresh_drives()
+        self.drive_box = ttk.Combobox(rail, textvariable=self.drive_var,
+                                      state="readonly", font=self.font_small)
+        self.drive_box.grid(row=row, column=0, sticky="we", padx=pad,
+                            pady=(6, 6))
+        row += 1
+        PillButton(rail, "Refresh drives", kind="ghost",
+                   font=self.font_small, background=SIDEBAR,
+                   command=self._refresh_drives).grid(
+            row=row, column=0, sticky="w", padx=pad, pady=(0, 18))
+        row += 1
 
-        ttk.Label(card, text="Mode", style="Field.TLabel").grid(
-            row=0, column=2, sticky="w", padx=(20, 8))
+        # --- mode
+        ttk.Label(rail, text="MODE", style="Section.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad)
+        row += 1
         self.mode_var = tk.StringVar(value="undelete")
-        mode = ttk.Frame(card, style="Card.TFrame")
-        mode.grid(row=0, column=3, sticky="w")
-        ttk.Radiobutton(mode, text="Undelete (keeps filenames)",
-                        variable=self.mode_var, value="undelete",
-                        command=self._toggle_mode).pack(side="left")
-        ttk.Radiobutton(mode, text="Deep scan (any drive)",
-                        variable=self.mode_var, value="carve",
-                        command=self._toggle_mode).pack(side="left", padx=(14, 0))
+        Segmented(rail, self.mode_var,
+                  [("undelete", "Undelete  ·  keeps filenames"),
+                   ("carve", "Deep scan  ·  any drive")],
+                  command=self._toggle_mode).grid(
+            row=row, column=0, sticky="we", padx=pad, pady=(8, 14))
+        row += 1
 
-        ttk.Label(card, text="Recover to", style="Field.TLabel").grid(
-            row=1, column=0, sticky="w", pady=(12, 0), padx=(0, 8))
+        # --- file types, only relevant to deep scan
+        self.types_row = tk.Frame(rail, background=SIDEBAR)
+        self.types_row.grid(row=row, column=0, sticky="we", padx=pad,
+                            pady=(0, 14))
+        ttk.Label(self.types_row, text="FILE TYPES",
+                  style="Section.TLabel").grid(row=0, column=0, columnspan=3,
+                                               sticky="w", pady=(0, 6))
+        self.type_vars = {}
+        for i, ext in enumerate(sorted(carve.SIGNATURES)):
+            var = tk.BooleanVar(value=ext in ("jpg", "png", "pdf"))
+            self.type_vars[ext] = var
+            ttk.Checkbutton(self.types_row, text=ext, variable=var).grid(
+                row=1 + i // 3, column=i % 3, sticky="w", padx=(0, 10))
+        row += 1
+
+        # --- destination
+        ttk.Label(rail, text="RECOVER TO", style="Section.TLabel").grid(
+            row=row, column=0, sticky="w", padx=pad)
+        row += 1
         self.dest_var = tk.StringVar(
             value=os.path.join(os.path.expanduser("~"), "Recovered"))
-        ttk.Entry(card, textvariable=self.dest_var).grid(
-            row=1, column=1, columnspan=3, sticky="we", pady=(12, 0))
-        ttk.Button(card, text="Browse...", command=self._pick_dest).grid(
-            row=1, column=4, sticky="w", padx=(8, 0), pady=(12, 0))
+        ttk.Entry(rail, textvariable=self.dest_var,
+                  font=self.font_small).grid(row=row, column=0, sticky="we",
+                                             padx=pad, pady=(6, 6))
+        row += 1
+        PillButton(rail, "Choose folder...", kind="ghost",
+                   font=self.font_small, background=SIDEBAR,
+                   command=self._pick_dest).grid(row=row, column=0,
+                                                 sticky="w", padx=pad)
+        row += 1
 
-        self.types_row = ttk.Frame(card, style="Card.TFrame")
-        self.types_row.grid(row=2, column=0, columnspan=5, sticky="w",
-                            pady=(12, 0))
-        ttk.Label(self.types_row, text="File types",
-                  style="Field.TLabel").pack(side="left", padx=(0, 10))
-        self.type_vars = {}
-        for ext in carve.SIGNATURES:
-            var = tk.BooleanVar(value=ext in ("jpg", "png", "pdf", "docx"))
-            self.type_vars[ext] = var
-            ttk.Checkbutton(self.types_row, text=ext, variable=var).pack(
-                side="left", padx=(0, 8))
-        self.types_row.grid_remove()
+        rail.rowconfigure(row, weight=1)
+        row += 1
 
-        actions = ttk.Frame(card, style="Card.TFrame")
-        actions.grid(row=3, column=0, columnspan=5, sticky="w", pady=(14, 0))
-        self.scan_btn = ttk.Button(actions, text="Start scan",
-                                   style="Accent.TButton", command=self._start)
-        self.scan_btn.pack(side="left")
-        self.stop_btn = ttk.Button(actions, text="Stop", command=self._stop,
-                                   state="disabled")
-        self.stop_btn.pack(side="left", padx=(8, 0))
+        self.scan_btn = PillButton(rail, "Start scan", command=self._start,
+                                   kind="primary", font=self.font_body,
+                                   background=SIDEBAR, width=238)
+        self.scan_btn.grid(row=row, column=0, padx=pad, pady=(10, 8))
+        row += 1
+        self.stop_btn = PillButton(rail, "Stop", command=self._stop,
+                                   kind="ghost", font=self.font_small,
+                                   background=SIDEBAR, width=238)
+        self.stop_btn["state"] = "disabled"
+        self.stop_btn.grid(row=row, column=0, padx=pad, pady=(0, 22))
 
-        # --- results
-        results = ttk.Frame(outer, style="Card.TFrame", padding=(12, 10))
-        results.grid(row=2, column=0, sticky="nsew")
-        results.rowconfigure(1, weight=1)
-        results.columnconfigure(0, weight=1)
+        self._refresh_drives()
+        self._toggle_mode()
 
-        bar = ttk.Frame(results, style="Card.TFrame")
-        bar.grid(row=0, column=0, sticky="we", pady=(0, 8))
-        bar.columnconfigure(1, weight=1)
+    def _build_main(self):
+        main = tk.Frame(self.root, background=BG)
+        main.grid(row=0, column=1, sticky="nsew")
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(2, weight=1)
 
-        ttk.Label(bar, text="Search", style="Field.TLabel").grid(
-            row=0, column=0, padx=(0, 8))
+        # --- header: what this screen is, and the one action that matters
+        header = tk.Frame(main, background=BG)
+        header.grid(row=0, column=0, sticky="we", padx=26, pady=(24, 6))
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="Deleted files", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w")
+        self.recover_btn = PillButton(header, "Recover selected",
+                                      command=self._recover, kind="primary",
+                                      font=self.font_body)
+        self.recover_btn["state"] = "disabled"
+        self.recover_btn.grid(row=0, column=1, sticky="e")
+        ttk.Label(header, textvariable=self.subtitle_var,
+                  style="Sub.TLabel").grid(row=1, column=0, sticky="w",
+                                           pady=(2, 0))
+
+        # --- filter bar
+        bar = tk.Frame(main, background=BG)
+        bar.grid(row=1, column=0, sticky="we", padx=26, pady=(14, 10))
+        bar.columnconfigure(0, weight=1)
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._apply_filter())
-        entry = ttk.Entry(bar, textvariable=self.search_var)
-        entry.grid(row=0, column=1, sticky="we")
+        entry = ttk.Entry(bar, textvariable=self.search_var,
+                          font=self.font_body)
+        entry.grid(row=0, column=0, sticky="we")
         entry.bind("<Escape>", lambda e: self.search_var.set(""))
-
         self.only_good = tk.BooleanVar(value=False)
         ttk.Checkbutton(bar, text="Only likely recoverable",
-                        variable=self.only_good,
-                        command=self._apply_filter).grid(
-            row=0, column=2, padx=(12, 0))
-        ttk.Button(bar, text="Select all shown",
-                   command=self._select_all).grid(row=0, column=3, padx=(12, 0))
-        self.recover_btn = ttk.Button(bar, text="Recover selected",
-                                      style="Accent.TButton",
-                                      command=self._recover, state="disabled")
-        self.recover_btn.grid(row=0, column=4, padx=(8, 0))
+                        style="Main.TCheckbutton", variable=self.only_good,
+                        command=self._apply_filter).grid(row=0, column=1,
+                                                         padx=(14, 0))
+        PillButton(bar, "Select all", kind="ghost", font=self.font_small,
+                   command=self._select_all).grid(row=0, column=2,
+                                                  padx=(10, 0))
+
+        # --- results
+        table = tk.Frame(main, background=PANEL, highlightthickness=1,
+                         highlightbackground=LINE)
+        table.grid(row=2, column=0, sticky="nsew", padx=26)
+        table.columnconfigure(0, weight=1)
+        table.rowconfigure(0, weight=1)
 
         cols = ("name", "folder", "size", "deleted", "chance", "condition")
-        self.tree = ttk.Treeview(results, columns=cols, show="headings",
+        self.tree = ttk.Treeview(table, columns=cols, show="headings",
                                  selectmode="extended")
         headings = {"name": "File name", "folder": "Original folder",
                     "size": "Size", "deleted": "Deleted",
-                    "chance": "Recovery chance", "condition": "Condition"}
-        widths = {"name": 280, "folder": 300, "size": 90,
-                  "deleted": 130, "chance": 120, "condition": 150}
+                    "chance": "Chance", "condition": "Condition"}
+        widths = {"name": 250, "folder": 240, "size": 90,
+                  "deleted": 130, "chance": 80, "condition": 170}
         for c in cols:
             self.tree.heading(c, text=headings[c],
                               command=lambda col=c: self._sort(col))
             self.tree.column(c, width=widths[c],
                              anchor="e" if c in ("size", "chance") else "w")
-        self.tree.grid(row=1, column=0, sticky="nsew")
+        self.tree.grid(row=0, column=0, sticky="nsew")
 
-        vs = ttk.Scrollbar(results, orient="vertical", command=self.tree.yview)
-        vs.grid(row=1, column=1, sticky="ns")
+        vs = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
+        vs.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=vs.set)
 
         self.tree.tag_configure("good", foreground=GOOD)
         self.tree.tag_configure("partial", foreground=WARN)
         self.tree.tag_configure("gone", foreground=BAD)
+        self.tree.tag_configure("stripe", background=STRIPE)
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._update_buttons())
 
-        # --- status
-        status = ttk.Frame(outer)
-        status.grid(row=3, column=0, sticky="we", pady=(10, 0))
+        # --- status strip
+        status = tk.Frame(main, background=BG)
+        status.grid(row=3, column=0, sticky="we", padx=26, pady=(10, 18))
         status.columnconfigure(0, weight=1)
-        self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(status, textvariable=self.status_var,
-                  style="Sub.TLabel").grid(row=0, column=0, sticky="w")
-        self.progress = ttk.Progressbar(status, length=240, mode="determinate")
+                  style="Status.TLabel").grid(row=0, column=0, sticky="w")
+        self.progress = ttk.Progressbar(
+            status, length=220, mode="determinate",
+            style="Thin.Horizontal.TProgressbar")
         self.progress.grid(row=0, column=1, sticky="e")
 
-    # ------------------------------------------------------------- helpers
     def _check_privileges(self):
         elevated = True
         try:
@@ -385,6 +651,7 @@ class App:
         self.stop_flag.clear()
         self.scanning = True
         self.scan_btn["state"] = "disabled"
+        self.scan_btn["text"] = "Scanning..."
         self.stop_btn["state"] = "normal"
         self.recover_btn["state"] = "disabled"
         self.progress["value"] = 0
@@ -492,7 +759,10 @@ class App:
         for i, f in enumerate(self.visible[:20000]):
             chance = f.chance if f.chance is not None else 100
             tag = "good" if chance >= 80 else "partial" if chance >= 40 else "gone"
-            self.tree.insert("", "end", iid=str(i), tags=(tag,), values=(
+            # Banded rows: the eye loses its place tracking a filename across
+            # six columns of a long list otherwise.
+            tags = (tag, "stripe") if i % 2 else (tag,)
+            self.tree.insert("", "end", iid=str(i), tags=tags, values=(
                 f.name,
                 f.path or "",
                 human_size(f.size),
@@ -503,7 +773,13 @@ class App:
 
         shown = len(self.visible)
         total = len(self.results)
-        extra = "  (showing first 20,000)" if shown > 20000 else ""
+        extra = "  ·  showing the first 20,000" if shown > 20000 else ""
+        if total:
+            self.subtitle_var.set(
+                f"{shown:,} of {total:,} found{extra}"
+                if shown != total else f"{total:,} found{extra}")
+        else:
+            self.subtitle_var.set("Pick a drive and press Start scan.")
         self.status_var.set(
             f"{shown:,} of {total:,} deleted items shown{extra}"
             if total else "Ready.")
@@ -706,6 +982,7 @@ class App:
                 elif kind == "done":
                     self.scanning = False
                     self.scan_btn["state"] = "normal"
+                    self.scan_btn["text"] = "Start scan"
                     self.stop_btn["state"] = "disabled"
                     self.progress["value"] = 100
                     self._update_buttons()
