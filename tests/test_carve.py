@@ -121,3 +121,72 @@ class CarveNoiseTests(ImageTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CarveInterleavedReadTests(ImageTestCase):
+    """
+    The carver walks the whole device sequentially while extracting files it
+    finds along the way, so a sequential read and a random read are
+    interleaved on one descriptor the entire time.
+
+    When both relied on the shared file position, the first extraction pulled
+    the walk off course and everything afterwards was read from the wrong
+    offset. Real files were skipped and pure noise was returned in their
+    place - reported, as everything carved was, at 100%.
+    """
+
+    def setUp(self):
+        self.first = jpeg(b"A" * 30_000)
+        self.second = jpeg(b"B" * 30_000)
+        # Far enough apart that the walk must cross a chunk boundary between
+        # them, with an extraction happening in between.
+        blob = (noise(1_000_000, seed=11) + self.first
+                + noise(carve.CHUNK, seed=12) + self.second
+                + noise(500_000, seed=13))
+        self.use_image(bytes(blob))
+
+    def test_files_after_the_first_are_still_found(self):
+        found = list(carve.scan(self.disk(), ["jpg"]))
+        self.assertEqual(len(found), 2,
+                         "extracting one file knocked the scan off course and "
+                         "later files were missed")
+
+    def test_and_they_are_byte_identical(self):
+        found = sorted(carve.scan(self.disk(), ["jpg"]),
+                       key=lambda f: f.offset)
+        self.assertEqual(md5(found[0].data), md5(self.first))
+        self.assertEqual(md5(found[1].data), md5(self.second))
+
+    def test_reported_offsets_point_at_the_real_data(self):
+        for f in carve.scan(self.disk(), ["jpg"]):
+            self.assertEqual(self.blob_at(f.offset, 3), b"\xFF\xD8\xFF")
+
+    def blob_at(self, offset, length):
+        with open(self.image_path, "rb") as fh:
+            fh.seek(offset)
+            return fh.read(length)
+
+
+class CarveHonestyTests(ImageTestCase):
+    """
+    Carving cannot know whether a file is whole. It used to claim 100% for
+    everything it returned, which is the same flattering guess the undelete
+    engines were fixed for.
+    """
+
+    def setUp(self):
+        self.use_image(noise(2000, seed=21) + jpeg(b"J" * 4000)
+                       + noise(2000, seed=22) + b"PK\x03\x04" + b"Z" * 5000)
+
+    def test_nothing_carved_is_promised_at_100_percent(self):
+        for f in carve.scan(self.disk(), ["jpg", "zip"]):
+            self.assertLess(f.chance, 100,
+                            f"{f.name} was carved and promised as certain")
+
+    def test_a_format_with_an_end_marker_scores_higher_than_one_without(self):
+        """
+        A JPEG's footer says where it ends. A ZIP has none, so it is cut at an
+        arbitrary length and carries trailing junk.
+        """
+        found = {f.ext: f for f in carve.scan(self.disk(), ["jpg", "zip"])}
+        self.assertGreater(found["jpg"].chance, found["zip"].chance)

@@ -60,6 +60,33 @@ class ReadOnlyDisk:
         return self._size
 
     # -- reading ------------------------------------------------------------
+    def _read_at(self, offset, size):
+        """
+        Read at an absolute offset without touching the file position.
+
+        This matters more than it looks. The carver streams the whole device
+        while pulling out files it finds along the way, so a sequential walk
+        and a random read are interleaved on the same descriptor. When both
+        relied on the shared file position, every extraction yanked the walk
+        somewhere else: files after the first were read from the wrong offset,
+        so the carver both skipped real files and produced ones that were pure
+        noise - while reporting them at 100%.
+
+        os.pread reads at a position without moving it, and is atomic, so the
+        two activities cannot disturb each other. Windows has no pread; there
+        we seek explicitly on every call, which fixes the interleaving within
+        a thread even though it is not atomic across threads.
+        """
+        if size <= 0:
+            return b""
+        if hasattr(os, "pread"):
+            try:
+                return os.pread(self._fd, size, offset)
+            except OSError:
+                return b""
+        os.lseek(self._fd, offset, os.SEEK_SET)
+        return os.read(self._fd, size)
+
     def read(self, offset, length):
         """Read `length` bytes from absolute `offset`. Handles alignment."""
         if length <= 0:
@@ -70,24 +97,34 @@ class ReadOnlyDisk:
         skip = offset - start
         total = ((skip + length + ss - 1) // ss) * ss
 
-        os.lseek(self._fd, start, os.SEEK_SET)
-        buf = b""
-        remaining = total
-        while remaining > 0:
-            piece = os.read(self._fd, min(remaining, 8 * 1024 * 1024))
+        # Collected into a list and joined once: appending to a bytes object
+        # in a loop copies the whole accumulated buffer every time, which is
+        # invisible for a 512-byte record and brutal for a 2GB carve read.
+        pieces = []
+        got = 0
+        while got < total:
+            piece = self._read_at(start + got,
+                                  min(total - got, 8 * 1024 * 1024))
             if not piece:
                 break
-            buf += piece
-            remaining -= len(piece)
+            pieces.append(piece)
+            got += len(piece)
 
+        buf = b"".join(pieces)
         return buf[skip:skip + length]
 
     def stream(self, chunk_size, start=0):
-        """Yield (offset, bytes) sequentially. Used by the carver."""
+        """
+        Yield (offset, bytes) sequentially. Used by the carver.
+
+        Each chunk is read at an explicit offset rather than from wherever the
+        descriptor happens to be pointing, so a caller that reads the disk
+        between iterations - which the carver does constantly - cannot knock
+        the walk off course.
+        """
         offset = start
-        os.lseek(self._fd, start, os.SEEK_SET)
         while True:
-            data = os.read(self._fd, chunk_size)
+            data = self._read_at(offset, chunk_size)
             if not data:
                 return
             yield offset, data

@@ -122,6 +122,10 @@ if any module other than diskio.py starts opening devices.
   Never imply otherwise in UI text or docs.
 - Compressed and encrypted NTFS files are not decoded.
 - Carved formats without a footer (ZIP, DOCX, MP4) include trailing junk.
+- Carving cannot tell whether a file is whole, and a fragmented file carves
+  into nonsense after its first piece however clean the header looked. Carved
+  results are therefore never scored above 75, and never at 100. Don't
+  "improve" that number.
 
 ## Testing
 

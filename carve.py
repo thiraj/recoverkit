@@ -42,7 +42,14 @@ class CarvedFile:
         self.size = size
         self.data = data
         self.path = "(no folder - carved)"
-        self.chance = 100
+        # Carving has no filesystem records to check against, so it cannot
+        # know whether a file is whole - only that it starts and ends where a
+        # file of this type should. Formats with an end marker are strong
+        # evidence; formats without one are cut at an arbitrary length and
+        # routinely carry trailing junk, and a fragmented file carves into
+        # nonsense after its first piece however clean the header looked.
+        # Saying 100% to all of that was never honest.
+        self.chance = 75 if SIGNATURES.get(ext, (None, None, 0))[1] else 40
         self.deleted_at = None
         self.created_at = None
         self.is_dir = False

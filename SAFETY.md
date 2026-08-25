@@ -20,6 +20,13 @@ Write to source rejected by OS: OSError - Bad file descriptor
 The object exposes `read`, `stream`, `size` and `close`. There is no write
 method, no seek-and-write, no truncate.
 
+Reads are *positional* — `os.pread` where the platform has it, an explicit
+seek per call where it doesn't. Nothing depends on a shared file position, so
+a sequential walk of the drive and a random read cannot disturb each other.
+That is a correctness property as much as a safety one: when they did share a
+position, the deep scan's own extractions pulled its walk off course and it
+returned files built from the wrong offsets.
+
 ## 2. Only one module can touch a source drive
 
 `diskio.py` is the sole place in the codebase that opens a device. `ntfs.py`,

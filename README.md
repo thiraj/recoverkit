@@ -16,7 +16,7 @@ through thousands of `recovered_00001.jpg` files.
 | Mode | What you get | Works on |
 |---|---|---|
 | **Undelete** | Real filenames, original folder paths, deletion dates, exact sizes, and an honest recovery-chance score. Handles fragmented files correctly. | **NTFS** — Windows drives, and NTFS USB/external disks plugged into a Mac or Linux box. **exFAT** — SD cards, camera cards, phones, most large USB sticks |
-| **Deep scan** | Files rebuilt from their content signatures. No names or folders. | Any drive: APFS, HFS+, ext4, FAT32, SD cards, cameras |
+| **Deep scan** | Files rebuilt from their content signatures. No names or folders, and no way to tell whether a file is whole — scores are capped accordingly. | Any drive: APFS, HFS+, ext4, FAT32, SD cards, cameras |
 
 Use **Undelete** first — RecoverKit picks the right engine for the drive on its
 own. Fall back to **Deep scan** if the drive is neither NTFS nor exFAT, or the
