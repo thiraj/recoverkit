@@ -125,10 +125,58 @@ where the unknowns are.
   the engines stay Python. If any part of `diskio.py` is later moved to Rust,
   its safety tests move with it or the guarantee is unevidenced.
 
-## What needs deciding before phase 2
+## Decisions taken
 
-1. Is the Tk window retired, or kept as the fallback interface?
-2. Is there an Apple Developer account, or does macOS elevation take the
-   password-prompt route?
-3. Which platforms ship first? Elevation is three separate pieces of work and
-   doing all three at once is the slow way.
+1. **The Tk window stays, as a fallback only.** It keeps the "copy the folder
+   and run one command" property, which matters on a machine that is already
+   broken. It is not the interface anyone is meant to use day to day, and it
+   does not get new features - if a change is needed in both, the Tauri side
+   is the one that gets the design attention.
+2. **No Apple Developer account until the thing is finished.** macOS
+   elevation therefore takes the password-prompt route for now, and
+   distribution is unsigned. See the note below on what that costs.
+3. **macOS is built first, Windows matters most.** Development happens on a
+   Mac, so macOS is where anything can actually be tested. But Windows is
+   where the need is - it is where NTFS lives, and NTFS undelete is this
+   project's strongest feature. Design decisions get weighed for Windows even
+   while the work happens on macOS.
+4. **Free and public first, some earning plan later.** Which makes the
+   licence worth thinking about *before* more of it is published, not after.
+
+## What unsigned distribution actually costs
+
+Downloadable-but-unsigned works. It is not free:
+
+- **Windows** shows "Windows protected your PC" and hides the run button
+  behind *More info*. For a tool that then asks for administrator rights and
+  reads raw disks, that sequence looks exactly like malware to a cautious
+  user. Signing certificates run £200-400/year and, since 2023, require
+  hardware tokens.
+- **macOS** refuses to open an unsigned bundle at all on first launch. The
+  user has to right-click and choose Open, or go into System Settings and
+  approve it by hand. Notarisation needs the £79/year account.
+- **Antivirus false positives** are near-certain. A PyInstaller binary that
+  opens raw devices matches several heuristics at once. README already warns
+  about this; it will need submitting to vendors for whitelisting.
+
+GitHub Releases is the better first home for downloads rather than a personal
+site: it carries a trust signal, publishes checksums, and costs nothing.
+
+## The Windows gap, concretely
+
+Windows is the priority audience and currently gets the worse experience:
+
+    macOS      TESTCARD — 3.7 GB exFAT, removable — /dev/rdisk2s1
+    Windows    C:
+
+`diskio.list_volumes` builds rich, plain-language labels on macOS and returns
+bare drive letters on Windows. No volume name, no size, no filesystem, no
+indication of which drive is removable. Everything the "which drive do I
+pick" problem needed solving, solved on the platform that needs it least.
+
+None of the Windows code paths have ever been run. The suite skips 13 tests
+outside Windows.
+
+**The cheapest fix for that is CI.** GitHub Actions runs Windows, macOS and
+Linux for free on a public repository. Without it, "Windows first" means
+shipping code nobody has executed.
