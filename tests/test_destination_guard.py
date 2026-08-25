@@ -318,3 +318,59 @@ class WindowsGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DropdownLabelTests(unittest.TestCase):
+    """
+    The label is the only thing most users will read before pointing a
+    recovery tool at a drive. Three entries all reading "Whole drive" is not
+    a description, it is a coin toss.
+    """
+
+    def test_a_whole_drive_is_named_by_what_is_on_it(self):
+        label = diskio._describe_whole_disk(
+            ["TESTCARD"], 4_026_531_840, True, "/dev/rdisk2")
+        self.assertIn("TESTCARD", label)
+        self.assertIn("/dev/rdisk2", label)
+
+    def test_several_volumes_are_summarised_not_dumped(self):
+        label = diskio._describe_whole_disk(
+            ["Macintosh HD", "Data", "Spare", "Extra"], 500_000_000_000,
+            False, "/dev/rdisk0")
+        self.assertIn("Macintosh HD", label)
+        self.assertIn("3 more", label)
+
+    def test_a_nameless_drive_still_gets_a_label(self):
+        label = diskio._describe_whole_disk([], 1_000_000, True, "/dev/rdisk9")
+        self.assertTrue(label.strip())
+        self.assertIn("/dev/rdisk9", label)
+
+    def test_parts_are_separable_even_when_the_name_has_a_hyphen(self):
+        """
+        "OSX - Data" is a real volume name. Splitting a label on a plain
+        hyphen would cut it in half and mislabel the drive.
+        """
+        label = diskio._describe("OSX - Data", "/System/Volumes/Data",
+                                 500_000_000_000, False, "APFS",
+                                 "/dev/rdisk1s1")
+        parts = label.split(diskio.PART)
+        self.assertEqual(len(parts), 3, label)
+        self.assertEqual(parts[0], "OSX - Data")
+        self.assertEqual(parts[-1], "/dev/rdisk1s1")
+
+    def test_an_unmounted_volume_says_so(self):
+        label = diskio._describe("TESTCARD", None, 4_000_000_000, True,
+                                 "exFAT", "/dev/rdisk2s1")
+        self.assertIn("not mounted", label)
+
+    def test_a_redundant_mount_point_is_not_repeated(self):
+        label = diskio._describe("TESTCARD", "/Volumes/TESTCARD",
+                                 4_000_000_000, True, "exFAT",
+                                 "/dev/rdisk2s1")
+        self.assertNotIn("/Volumes/TESTCARD", label)
+        self.assertIn("TESTCARD", label)
+
+    def test_an_informative_mount_point_is_kept(self):
+        label = diskio._describe("Data", "/System/Volumes/Data", None, False,
+                                 "APFS", "/dev/rdisk1s1")
+        self.assertIn("/System/Volumes/Data", label)

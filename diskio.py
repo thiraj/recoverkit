@@ -309,24 +309,61 @@ _HIDDEN_VOLUMES = {"Preboot", "Recovery", "VM", "Update", "xarts",
                    "iSCPreboot", "Hardware"}
 
 
+PART = "  —  "
+
+
 def _describe(name, mount_point, size, removable, filesystem, device):
     """
     Build the label the user picks from the dropdown.
 
-        Untitled - /Volumes/Untitled - 3.7 GB removable, NTFS [/dev/rdisk4s1]
+        TESTCARD  —  3.7 GB exFAT, removable  —  /dev/rdisk2s1
+        Data  —  not mounted, internal APFS  —  /dev/rdisk1s5
 
-    The name and mount point are what they recognise from Finder; the /dev
-    path is kept on the end so anyone who does know what they are looking at
-    can confirm they picked the right thing.
+    Parts are separated by an em dash with spaces, because volume names
+    routinely contain plain hyphens - "OSX - Data" is a real one - and a
+    label you cannot reliably read apart is a label that misleads.
+
+    The name is what they recognise from Finder; the /dev path stays on the
+    end so anyone who does know what they are looking at can confirm it. The
+    mount point is dropped when it merely repeats the volume name.
     """
-    bits = []
+    facts = []
     if size:
-        bits.append(human_size(size))
-    bits.append("removable" if removable else "internal")
+        facts.append(human_size(size))
     if filesystem:
-        bits.append(filesystem)
-    return (f"{name or 'Untitled'} - {mount_point or 'not mounted'} - "
-            f"{', '.join(bits)} [{device}]")
+        facts.append(filesystem)
+    detail = " ".join(facts)
+    detail += (", " if detail else "") + ("removable" if removable
+                                          else "internal")
+
+    label = name or "Untitled"
+    if not mount_point:
+        detail = "not mounted, " + detail
+    elif os.path.basename(mount_point) != label:
+        detail += f", at {mount_point}"
+    return f"{label}{PART}{detail}{PART}{device}"
+
+
+def _describe_whole_disk(volume_names, size, removable, device):
+    """
+    Name a whole drive by what is on it.
+
+    "Whole drive - 3.8 GB removable" is useless when three of them are listed
+    together: there is no way to tell which physical thing it means. Naming it
+    after the volumes it holds gives the user something they can actually
+    match against what they plugged in.
+    """
+    names = [n for n in volume_names if n]
+    if not names:
+        what = "Entire drive"
+    elif len(names) == 1:
+        what = f"Entire drive holding {names[0]}"
+    elif len(names) == 2:
+        what = f"Entire drive holding {names[0]} and {names[1]}"
+    else:
+        what = f"Entire drive holding {names[0]} and {len(names) - 1} more"
+    where = "removable" if removable else "internal"
+    return f"{what}{PART}{human_size(size)}, {where}{PART}{device}"
 
 
 def _macos_volumes():
@@ -395,16 +432,32 @@ def _macos_volumes():
         if entry.get("APFSPhysicalStores"):
             continue                                 # synthesized, not hardware
         if disk_id:
-            device = f"/dev/r{disk_id}"
-            whole_disks.append((
-                not removable, disk_id,
-                f"Whole drive - {human_size(entry.get('Size'))} "
-                f"{'removable' if removable else 'internal'} [{device}]",
-                device))
+            whole_disks.append((not removable, disk_id, entry.get("Size"),
+                                removable))
+
+    # Name each whole drive after the volumes living on it, following APFS
+    # containers back to the hardware they are really stored on.
+    on_disk = {}
+    for entry in plist.get("AllDisksAndPartitions", []):
+        home = _resolve_synthesized(entry.get("DeviceIdentifier", "")) or ""
+        for part in ((entry.get("Partitions") or [])
+                     + (entry.get("APFSVolumes") or [])):
+            name = part.get("VolumeName")
+            if (name and name not in _HIDDEN_VOLUMES
+                    and part.get("Content") not in ("EFI", "Apple_Boot")
+                    and not part.get("OSInternal")):
+                names = on_disk.setdefault(home, [])
+                if name not in names:
+                    names.append(name)
 
     volumes.sort()
     whole_disks.sort()
-    return [(label, path) for _, _, label, path in volumes + whole_disks]
+    out = [(label, path) for _, _, label, path in volumes]
+    for _, disk_id, size, removable in whole_disks:
+        device = f"/dev/r{disk_id}"
+        out.append((_describe_whole_disk(on_disk.get(disk_id, []), size,
+                                         removable, device), device))
+    return out
 
 
 def _macos_volumes_fallback():

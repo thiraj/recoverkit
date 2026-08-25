@@ -145,7 +145,7 @@ class App:
         self.volumes = []
         self.drive_var = tk.StringVar()
         self.drive_box = ttk.Combobox(
-            drive_row, textvariable=self.drive_var, state="readonly", width=58)
+            drive_row, textvariable=self.drive_var, state="readonly", width=76)
         self.drive_box.pack(side="left")
         ttk.Button(drive_row, text="Refresh", width=8,
                    command=self._refresh_drives).pack(side="left", padx=(6, 0))
