@@ -927,6 +927,18 @@ def same_physical_drive(source_path, dest_folder):
     """
     dest = os.path.abspath(dest_folder)
 
+    # Scanning a disk image file rather than a device. Writing to the
+    # filesystem that holds the image does not overwrite the image's own
+    # contents, so this is allowed - and it is how the test suite works.
+    # Checked before the platform branches, not after: on Windows the drive
+    # letter of an image file is simply the drive it is stored on, so every
+    # recovery next to an image was being refused.
+    try:
+        if os.path.isfile(source_path):
+            return False
+    except OSError:
+        return True
+
     if sys.platform == "win32":
         # Only a real drive specification counts - `C:` or `\\.\C:`. Taking
         # the last letter of whatever was passed reads `/dev/sda` as drive S
@@ -937,15 +949,6 @@ def same_physical_drive(source_path, dest_folder):
         if not match or not dst_letter.isalpha():
             return True                  # can't tell - assume the worst
         return match.group(1).upper() == dst_letter
-
-    # Scanning a disk image file rather than a device. Writing to the
-    # filesystem that holds the image does not overwrite the image's own
-    # contents, so this is allowed - it is how the test suite works.
-    try:
-        if os.path.isfile(source_path):
-            return False
-    except OSError:
-        return True
 
     source_disk = _resolve_synthesized(_whole_disk(source_path))
     if source_disk is None:

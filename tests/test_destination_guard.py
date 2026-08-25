@@ -481,3 +481,33 @@ class WindowsSourceParsingTests(unittest.TestCase):
         for source in ("/dev/sda", "/dev/rdisk4s1", r"\\.\PhysicalDrive1",
                        "", "some-file.img", r"\\server\share"):
             self.assertIsNone(self.parse(source), source)
+
+
+class DiskImageSourceTests(unittest.TestCase):
+    """
+    A disk image is a file, and recovering into the folder that holds it is
+    both legitimate and how the whole test suite works.
+
+    This exemption used to sit below the Windows branch, so Windows never
+    reached it: the image's drive letter is simply the letter of the drive
+    it is stored on, which matches the destination, and every recovery next
+    to an image was refused. Only CI on Windows could have found that.
+    """
+
+    def setUp(self):
+        fd, self.image = tempfile.mkstemp(suffix=".img")
+        os.close(fd)
+        self.addCleanup(os.unlink, self.image)
+
+    def test_recovering_beside_an_image_is_allowed(self):
+        self.assertFalse(diskio.same_physical_drive(
+            self.image, os.path.dirname(self.image)))
+
+    def test_and_into_a_folder_that_does_not_exist_yet(self):
+        self.assertFalse(diskio.same_physical_drive(
+            self.image, os.path.join(os.path.dirname(self.image), "Recovered")))
+
+    def test_a_device_is_still_judged_as_a_device(self):
+        """The exemption is for files, and must not swallow real devices."""
+        self.assertTrue(diskio.same_physical_drive(
+            "/dev/definitely-not-a-real-device", tempfile.gettempdir()))
