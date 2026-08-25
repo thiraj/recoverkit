@@ -149,12 +149,14 @@ class NoGuiImportsTests(unittest.TestCase):
             "zlib",                      # PNG chunk checksums in verify.py
             "array", "fcntl",            # asking a raw device its size
             "threading",                 # one lock, for platforms with no pread
+            "json",                      # the service's line protocol
         }
         # Modules of this project are not dependencies.
         allowed |= {name[:-3] for name in os.listdir(root)
                     if name.endswith(".py")}
         for module in ("ntfs.py", "exfat.py", "carve.py", "diskio.py",
-                       "signatures.py", "verify.py"):
+                       "signatures.py", "verify.py", "recovery.py",
+                       "service.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
@@ -173,6 +175,10 @@ class SourceOpeningTests(unittest.TestCase):
     def test_only_diskio_opens_devices(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         openers = ("os.open(", "open(", "io.open(", "os.fdopen(")
+        # Only the modules that read a source drive are checked. verify.py,
+        # recovery.py and service.py open files in the *destination*, which
+        # is their job - the rule is that nothing but diskio.py may open a
+        # source device, not that nothing may open anything.
         for module in ("ntfs.py", "exfat.py", "carve.py", "signatures.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 for number, line in enumerate(fh, 1):

@@ -18,6 +18,7 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 import carve
 import diskio
+import recovery
 import signatures
 import verify
 from exfat import ExfatVolume
@@ -1235,16 +1236,7 @@ class App:
                     skipped.append(f.name)
                     continue
 
-                folder = dest
-                if f.path and f.path not in ("\\", "(no folder - carved)"):
-                    safe = f.path.replace("\\", os.sep).replace(":", "")
-                    folder = os.path.join(dest, safe.lstrip(os.sep))
-                    os.makedirs(folder, exist_ok=True)
-
-                target = os.path.join(folder, self._safe_name(f.name))
-                target = self._unique(target)
-                with open(target, "wb") as out:
-                    out.write(data)
+                target = recovery.write(dest, f.path, f.name, data)
                 written.append(target)
                 ok += 1
             except Exception:
@@ -1313,23 +1305,9 @@ class App:
             f"Saved {done} tidied copy(ies), each named \"(trimmed)\".\n\n"
             f"Your original recovered files are untouched.")
 
-    @staticmethod
-    def _safe_name(name):
-        bad = '<>:"/\\|?*'
-        cleaned = "".join("_" if c in bad or ord(c) < 32 else c for c in name)
-        return cleaned.strip() or "recovered_file"
+    _safe_name = staticmethod(recovery.safe_name)
+    _unique = staticmethod(recovery.unique_path)
 
-    @staticmethod
-    def _unique(path):
-        if not os.path.exists(path):
-            return path
-        stem, ext = os.path.splitext(path)
-        i = 2
-        while os.path.exists(f"{stem} ({i}){ext}"):
-            i += 1
-        return f"{stem} ({i}){ext}"
-
-    # ------------------------------------------------------------- events
     def _drain(self):
         try:
             while True:
