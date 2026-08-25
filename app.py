@@ -526,14 +526,34 @@ class App:
         self.tree.selection_set(self.tree.get_children())
 
     def _update_buttons(self):
-        has = bool(self.tree.selection()) and not self.scanning
-        self.recover_btn["state"] = "normal" if has else "disabled"
+        # Deliberately not gated on the scan being finished. Deep scan streams
+        # results in as it goes, and those carry their own data - making
+        # someone watch a long scan finish before they can save a file that is
+        # already in hand is just a locked door. Anything that would need to
+        # read the drive again is turned away in _recover instead, where we
+        # know which files were picked.
+        self.recover_btn["state"] = ("normal" if self.tree.selection()
+                                     else "disabled")
 
     # ----------------------------------------------------------- recovery
     def _recover(self):
         picks = [self.visible[int(i)] for i in self.tree.selection()]
         if not picks:
             return
+        # Files carrying their own data can be saved at any time. Files that
+        # would need another read of the drive cannot, while the scanning
+        # thread is using that same handle - two threads seeking the same
+        # descriptor would hand back each other's bytes.
+        if self.scanning and any(getattr(f, "data", None) is None
+                                 for f in picks):
+            messagebox.showinfo(
+                "Still scanning",
+                "These files still have to be read from the drive, and the "
+                "scan is using it right now.\n\n"
+                "Wait for the scan to finish, or press Stop, then recover "
+                "them.")
+            return
+
         dest = self._guard_destination(self._source_path())
         if not dest:
             return
