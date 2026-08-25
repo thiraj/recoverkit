@@ -281,13 +281,31 @@ Agreed next steps, in order:
   and `RAIL_W` at the top of `app.py` decide the size of everything you can
   click or type into. No widget picks its own height, and no layout invents
   its own margin - that is the whole difference between a window that looks
-  designed and one that looks assembled. Every entry, dropdown and button is
-  drawn by this app (`Field`, `Dropdown`, `PillButton`, `CheckBox`,
-  `Segmented`, `ThinScrollbar`) because the platform themes cannot round a
-  corner or draw a one-pixel border. `LayoutTests` in
-  `tests/test_gui_behaviour.py` measures the finished window in pixels -
-  equal sizes, one flush left edge, right edges on the table's line, and the
-  Start scan button still on screen at the smallest window size.
+  designed and one that looks assembled. Every control is drawn by this app -
+  `Field`, `Dropdown`, `PillButton`, `CheckBox`, `ModeCard`, `Badge`,
+  `InfoBox`, `LinkButton`, `ThinScrollbar` and `ResultTable` - because no
+  platform theme will round a corner or draw a one-pixel border. `ttk` is
+  down to the progress bar. `LayoutTests` in `tests/test_gui_behaviour.py`
+  measures the finished window in pixels - one width down the rail, one
+  height for every single-line control, right edges on the table's line, and
+  the Start scan button still on screen at the smallest window size.
+- **The results table is drawn, not a Treeview.** ttk colours a whole row or
+  nothing, so the chance of recovery could only ever be a word in a column,
+  and a wash of red across the filename is what makes a list like this hard
+  to read. `ResultTable` gives each row a tick box, a type icon and a chance
+  pill, and draws *only the rows on screen* - a deep scan that finds eighty
+  thousand files scrolls like one that finds eight
+  (`test_only_the_rows_on_screen_are_drawn`). It keeps the slice of the
+  Treeview API the window already used, so rows are still addressed by index
+  as strings.
+- **The pill is the score, mapped.** `chance_pill()` turns a percentage into
+  Excellent/Good/Fair/Poor, and where the file's own first bytes have
+  something to say it says that instead: Overwritten, Empty space, In Trash,
+  Space reused. A word lands where a percentage does not - but it is never a
+  friendlier version of the number. Don't add a rung that flatters.
+- **Ticks are kept by identity, not by row number.** Filtering and sorting
+  renumber every row; `_apply_filter` remembers which files were ticked and
+  puts the ticks back on the same files.
 - Standard library only. Python 3.8-compatible syntax.
 - Comments explain *why*, especially for filesystem-format quirks — the NTFS
   spec is not obvious to a reader.

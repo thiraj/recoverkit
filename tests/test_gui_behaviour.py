@@ -347,29 +347,43 @@ class LayoutTests(NoDialogs, unittest.TestCase):
                 widget.winfo_rooty() - self.root.winfo_rooty(),
                 widget.winfo_width(), widget.winfo_height())
 
-    def rail_controls(self):
+    def rail_controls(self, kinds=None):
         """Everything in the settings rail you can click or type into."""
+        kinds = kinds or (appmod.PillButton, appmod.Dropdown, appmod.Field,
+                          appmod.InfoBox, appmod.ModeCard)
         found = []
 
         def walk(widget):
             for child in widget.winfo_children():
-                if isinstance(child, (appmod.PillButton, appmod.Dropdown,
-                                      appmod.Field)):
+                if isinstance(child, kinds):
                     found.append(child)
                 walk(child)
 
         walk(self.app.drive_box.master.master)      # the scrolling body
-        found.extend([self.app.scan_btn, self.app.stop_btn])
-        return found
+        found.extend(w for w in (self.app.scan_btn, self.app.stop_btn)
+                     if isinstance(w, kinds))
+        # A control that is not on screen has no geometry to compare - Tk
+        # reports it as one pixel square. Stop is hidden until a scan runs.
+        return [w for w in found if w.winfo_ismapped()]
 
-    def test_every_control_in_the_rail_is_the_same_size(self):
+    def test_every_control_in_the_rail_is_the_same_width(self):
+        """
+        Heights differ on purpose - a mode card carries a line of
+        explanation under its name - but nothing in the rail may be a
+        different width from the rest.
+        """
         self.show()
-        sizes = {(w.winfo_width(), w.winfo_height())
-                 for w in self.rail_controls()}
-        self.assertEqual(len(sizes), 1,
-                         f"the rail has controls of {len(sizes)} sizes: "
-                         f"{sorted(sizes)}")
-        self.assertEqual(sizes.pop()[1], appmod.CONTROL_H)
+        widths = {w.winfo_width() for w in self.rail_controls()}
+        self.assertEqual(len(widths), 1,
+                         f"the rail has {len(widths)} widths: {sorted(widths)}")
+
+    def test_the_single_line_controls_are_all_one_height(self):
+        self.show()
+        singles = self.rail_controls((appmod.PillButton, appmod.Dropdown,
+                                      appmod.Field, appmod.InfoBox))
+        self.assertTrue(singles)
+        self.assertEqual({w.winfo_height() for w in singles},
+                         {appmod.CONTROL_H})
 
     def test_every_control_in_the_rail_starts_at_the_same_edge(self):
         self.show()
@@ -384,7 +398,7 @@ class LayoutTests(NoDialogs, unittest.TestCase):
         self.show()
         recover = self.rect(self.app.recover_btn)
         select = self.rect(self.app.select_all_btn)
-        table = self.rect(self.app.tree.master)
+        table = self.rect(self.app.tree)
         self.assertEqual(recover[2:], select[2:])
         self.assertEqual(recover[0], select[0])
         self.assertEqual(recover[0] + recover[2], table[0] + table[2])
@@ -470,6 +484,138 @@ class LayoutTests(NoDialogs, unittest.TestCase):
         self.app._rail_view.yview_scroll(3, "units")
         self.root.update()
         self.assertGreater(self.app._rail_view.yview()[0], before)
+
+
+class ResultTableTests(NoDialogs, unittest.TestCase):
+    """
+    The results table, which this app draws itself.
+
+    ttk's Treeview colours a whole row or nothing, so the chance of getting a
+    file back could only ever be a word in a column. These cover the parts
+    that a table widget used to do for us and now have to be right here:
+    ticking rows, keeping those ticks, and not drawing eighty thousand rows
+    to show fifteen.
+    """
+
+    def setUp(self):
+        self.silence_dialogs()
+        self.root = tk.Tk()
+        self.addCleanup(self.root.destroy)
+        self.app = appmod.App(self.root)
+        self.root.geometry("1180x720+60+60")
+        self.root.deiconify()
+        self.root.update()
+
+    def add(self, count=6, chance=100, check=signatures.MATCH):
+        found = [ntfs.DeletedFile(
+            record=i, name=f"file{i:03}.jpg", path="\\Photos", size=1024 * i,
+            runs=[(i, 1)], chance=chance, deleted_at=None) for i in range(count)]
+        for f in found:
+            f.content_check = check
+        self.app._add(found)
+        self.root.update()
+        return found
+
+    def click_row(self, index, x=30):
+        """Click a row the way a person does, in the tick column."""
+        y = index * appmod.ROW_H + appmod.ROW_H // 2
+        self.app.tree.body.event_generate("<Button-1>", x=x, y=y)
+        self.root.update()
+
+    def test_clicking_a_row_ticks_it_and_clicking_again_unticks(self):
+        self.add(4)
+        self.click_row(1)
+        self.assertEqual(self.app.tree.selection(), ("1",))
+        self.click_row(1)
+        self.assertEqual(self.app.tree.selection(), ())
+
+    def test_the_recover_button_counts_what_is_ticked(self):
+        self.add(5)
+        self.click_row(0)
+        self.click_row(2)
+        self.assertEqual(self.app.recover_btn["text"], "Recover 2 selected")
+        self.assertEqual(self.app.recover_btn["state"], "normal")
+
+    def test_ticks_survive_a_search(self):
+        """
+        Rows are addressed by number and a search renumbers them. Ticking
+        forty photographs and then narrowing the list must not quietly throw
+        the ticks away - the Recover button acts on them.
+        """
+        found = self.add(6)
+        self.click_row(3)
+        picked = found[3]
+        self.app._placeholder_on = False
+        self.app.search_var.set(picked.name[:5])
+        self.root.update()
+        self.assertTrue(self.app.tree.selection(), "the tick was dropped")
+        still = self.app.visible[int(self.app.tree.selection()[0])]
+        self.assertIs(still, picked)
+
+    def test_ticks_survive_a_sort(self):
+        found = self.add(6)
+        self.click_row(0)
+        picked = self.app.visible[0]
+        self.app._sort("size")
+        self.root.update()
+        chosen = [self.app.visible[int(i)]
+                  for i in self.app.tree.selection()]
+        self.assertEqual(chosen, [picked])
+        self.assertIn(picked, found)
+
+    def test_select_all_ticks_every_row_that_is_showing(self):
+        self.add(7)
+        self.app._select_all()
+        self.assertEqual(len(self.app.tree.selection()), 7)
+
+    def test_only_the_rows_on_screen_are_drawn(self):
+        """
+        A deep scan can turn up tens of thousands of files. Drawing them all
+        and letting a scrollbar move the viewport is how a canvas table
+        becomes unusable.
+        """
+        self.add(4000)
+        drawn = len(self.app.tree.body.find_all())
+        self.assertLess(drawn, 400,
+                        f"{drawn} canvas items for a screen of ~15 rows")
+        self.assertEqual(len(self.app.tree.get_children()), 4000)
+
+    def test_the_pill_says_what_the_evidence_says(self):
+        """
+        The word is the score, mapped. Where the file's own first bytes have
+        something to say, they say it instead of a number.
+        """
+
+        class Result:
+            def __init__(self, chance, check):
+                self.chance, self.content_check = chance, check
+
+        cases = [
+            (100, signatures.MATCH, ("Excellent", "excellent")),
+            (75, signatures.MATCH, ("Good", "good")),
+            (50, signatures.MATCH, ("Fair", "fair")),
+            (10, signatures.MATCH, ("Poor", "poor")),
+            (0, signatures.MISMATCH, ("Overwritten", "grey")),
+            (0, signatures.BLANK, ("Empty space", "grey")),
+            (100, signatures.MOVED, ("In Trash", "good")),
+            (50, signatures.IN_USE, ("Space reused", "fair")),
+        ]
+        for chance, check, expected in cases:
+            self.assertEqual(appmod.chance_pill(Result(chance, check)),
+                             expected, f"{chance}% / {check}")
+
+    def test_a_carved_file_says_where_it_came_from_plainly(self):
+        found = self.add(1)
+        found[0].path = "(no folder - carved)"
+        self.app._apply_filter()
+        self.assertEqual(self.app.tree._rows[0]["folder"], "unknown (carved)")
+
+    def test_the_icon_follows_the_file_type(self):
+        for name, kind in (("holiday.JPG", "image"), ("clip.mov", "video"),
+                           ("song.mp3", "audio"), ("books.xlsx", "sheet"),
+                           ("stuff.zip", "archive"), ("notes.pdf", "doc"),
+                           ("noextension", "doc")):
+            self.assertEqual(appmod.icon_for(name), kind, name)
 
 
 class DrawnWidgetTests(unittest.TestCase):

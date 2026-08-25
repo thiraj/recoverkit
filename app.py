@@ -13,6 +13,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 
@@ -28,37 +29,50 @@ from ntfs import NtfsVolume
 APP_NAME = "RecoverKit"
 VERSION = "1.0"
 
-# Palette. Flat, high-contrast, one accent colour doing all the work - the
-# house style of the developer tools people are used to looking at.
+# Palette. One deep green doing all the work, everything else a grey. A
+# recovery tool is read for hours by someone having a bad day; the colour is
+# there to mark what is safe and what is gone, not to decorate.
 BG = "#ffffff"          # the working surface
-SIDEBAR = "#f6f8fa"     # the settings rail down the left
+SIDEBAR = "#f7f8f8"     # the settings rail down the left
 PANEL = "#ffffff"
-INK = "#16202c"         # primary text
-MUTED = "#69778a"       # labels and secondary text
-FAINT = "#8c97a5"
-ACCENT = "#1d63ed"
-ACCENT_DEEP = "#1550c8"  # hover
-ACCENT_SOFT = "#e8f0fe"  # selection wash
-GOOD = "#0f7b46"
-WARN = "#9a5b06"
-BAD = "#c0342c"
-LINE = "#e3e8ee"
-STRIPE = "#fafbfc"
-WASH_WARN = "#fff8ec"   # a hint of caution, not a warning label
-WASH_BAD = "#fdf1f0"
+INK = "#1b2129"         # primary text
+MUTED = "#697585"       # labels and secondary text
+FAINT = "#98a2ae"
+ACCENT = "#14532d"      # the one strong colour
+ACCENT_DEEP = "#0e3b20"  # hover
+ACCENT_SOFT = "#eef6f1"  # selected rows, the read-only badge
+ACCENT_EDGE = "#cde3d5"  # the border that goes with the wash
+GOOD = "#1e8a4c"
+WARN = "#8a5b08"
+BAD = "#a13029"
+LINE = "#e6e9ec"
+STRIPE = "#f6f7f8"      # table heading band and footer strip
 DISABLED = "#c3ccd8"
 
-# Metrics. Every control in the window is built from these four numbers, and
-# that is the whole trick to a window looking designed rather than assembled:
-# one height for anything you can click or type into, one corner radius, one
-# gutter, one rail width. Nothing gets to pick its own.
-CONTROL_H = 36          # buttons, dropdown, text fields - all identical
-RADIUS = 10             # corner radius on every rounded thing
-GUTTER = 24             # the margin the whole layout is aligned to
-RAIL_W = 292            # the settings rail
-FIELD_PAD = 12          # text inset inside a field, so text clears the curve
-ACTION_W = 168          # the two buttons over the results table, matched
+# The chance pill: background, text, dot. A word carries better than a
+# percentage - "Poor" is understood instantly and "38%" is not - but the word
+# is still the score, mapped, never a friendlier version of it.
+PILL_STYLES = {
+    "excellent": ("#e6f4ea", "#14532d", "#1e8a4c"),
+    "good": ("#edf6ef", "#256b40", "#3a9a63"),
+    "fair": ("#fdf3e3", "#8a5b08", "#d99a1a"),
+    "poor": ("#fdeceb", "#a13029", "#d94a41"),
+    "grey": ("#f0f2f4", "#5f6b76", "#9aa5b1"),
+}
 
+# Metrics. Every control in the window is built from these numbers, and that
+# is the whole trick to a window looking designed rather than assembled: one
+# height for anything you can click or type into, one corner radius, one
+# gutter, one rail width. Nothing gets to pick its own.
+CONTROL_H = 38          # buttons, dropdown, text fields - all identical
+RADIUS = 9              # corner radius on every rounded thing
+GUTTER = 24             # the margin the whole layout is aligned to
+RAIL_W = 270            # the settings rail
+FIELD_PAD = 12          # text inset inside a field, so text clears the curve
+ACTION_W = 172          # the two buttons over the results table, matched
+ROW_H = 45              # one row of results
+HEAD_H = 38             # the table's heading band
+FOOT_H = 34             # the strip along the bottom of the table
 
 def _first_font(root, candidates, size, weight="normal"):
     """
@@ -91,7 +105,9 @@ def human_size(n):
 
 
 def human_date(dt):
-    return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
+    # "25 Aug 14:02" rather than "2026-08-25 14:02": in a column of deletions
+    # from the last few days, the year is noise and the day is the answer.
+    return dt.strftime("%d %b %H:%M") if dt else ""
 
 
 def _round_rect(canvas, x1, y1, x2, y2, radius, **kw):
@@ -259,6 +275,194 @@ class CheckBox(tk.Canvas):
         self._draw()
         if self.command:
             self.command()
+
+
+class LinkButton(tk.Label):
+    """
+    A button that looks like a line of text.
+
+    "Refresh drives" and "Choose folder..." are things you do occasionally
+    and they sit next to the control they act on. Drawing them as full
+    buttons gives them the same weight as "Start scan", which is the one
+    thing on this screen that matters.
+    """
+
+    def __init__(self, master, text, command, font=None, background=SIDEBAR,
+                 **kw):
+        super().__init__(master, text=text, background=background,
+                         foreground=MUTED, font=font, cursor="arrow", **kw)
+        self.command = command
+        self.bind("<Button-1>", lambda e: self.command())
+        self.bind("<Enter>", lambda e: self.configure(foreground=ACCENT))
+        self.bind("<Leave>", lambda e: self.configure(foreground=MUTED))
+
+    def invoke(self):
+        self.command()
+
+
+class Badge(tk.Canvas):
+    """
+    The read-only promise, stated once at the top of the rail.
+
+    This is the single most important thing the program does, and the place
+    it belongs is where someone looks first - not buried in a menu or an
+    about box.
+    """
+
+    def __init__(self, master, text, font, background=SIDEBAR, **kw):
+        self._text = text
+        self._font = font
+        super().__init__(master, highlightthickness=0, bd=0,
+                         background=background, **kw)
+        self.bind("<Configure>", lambda e: self._draw())
+
+    def _draw(self):
+        self.delete("all")
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        measure = tkfont.Font(font=self._font)
+        lines = self._wrap(measure, width - 52)
+        height = max(len(lines) * (measure.metrics("linespace") + 2) + 22, 46)
+        self.configure(height=height)
+        _round_rect(self, 1, 1, width - 1, height - 1, RADIUS,
+                    fill=ACCENT_SOFT, outline=ACCENT_EDGE)
+        self._shield(16, height // 2)
+        y = (height - len(lines) * (measure.metrics("linespace") + 2)) // 2 + 1
+        for line in lines:
+            self.create_text(38, y, text=line, anchor="nw", fill=ACCENT,
+                             font=self._font)
+            y += measure.metrics("linespace") + 2
+
+    def _wrap(self, measure, room):
+        lines, current = [], ""
+        for word in self._text.split():
+            trial = f"{current} {word}".strip()
+            if current and measure.measure(trial) > room:
+                lines.append(current)
+                current = word
+            else:
+                current = trial
+        if current:
+            lines.append(current)
+        return lines
+
+    def _shield(self, x, y):
+        """A shield with a tick in it, drawn rather than shipped as a file."""
+        self.create_polygon(x, y - 9, x + 7, y - 6, x + 7, y + 1,
+                            x, y + 9, x - 7, y + 1, x - 7, y - 6,
+                            fill="", outline=ACCENT, width=1.4, smooth=False)
+        self.create_line(x - 3, y, x - 1, y + 3, x + 4, y - 4, fill=ACCENT,
+                         width=1.6, capstyle="round", joinstyle="round")
+
+
+class ModeCard(tk.Canvas):
+    """
+    One choice of scan mode, with the sentence that explains it.
+
+    Undelete and Deep scan are not two settings of one control - they are two
+    different programs with different results, and the difference is worth a
+    line of explanation each. A radio button with a label cannot carry that;
+    a card can.
+    """
+
+    HEIGHT = 62
+
+    def __init__(self, master, title, blurb, chosen=False, command=None,
+                 title_font=None, blurb_font=None, background=SIDEBAR, **kw):
+        self._title = title
+        self._blurb = blurb
+        self._chosen = chosen
+        self._title_font = title_font
+        self._blurb_font = blurb_font
+        self.command = command
+        super().__init__(master, height=self.HEIGHT, highlightthickness=0,
+                         bd=0, background=background, takefocus=1, **kw)
+        self.bind("<Configure>", lambda e: self._draw())
+        for sequence in ("<Button-1>", "<Return>", "<space>"):
+            self.bind(sequence, lambda e: self.command and self.command())
+        self.bind("<Enter>", lambda e: self._draw(hover=True))
+        self.bind("<Leave>", lambda e: self._draw())
+
+    def set_chosen(self, chosen):
+        self._chosen = chosen
+        self._draw()
+
+    def _draw(self, hover=False):
+        self.delete("all")
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        edge = ACCENT_EDGE if self._chosen else (ACCENT_EDGE if hover else LINE)
+        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, RADIUS,
+                    fill=ACCENT_SOFT if self._chosen else PANEL, outline=edge)
+        self.create_text(FIELD_PAD + 2, 20, text=self._title, anchor="w",
+                         fill=INK, font=self._title_font)
+        self.create_text(FIELD_PAD + 2, 41, text=self._blurb, anchor="w",
+                         fill=MUTED, font=self._blurb_font)
+        x, y = width - 22, self.HEIGHT // 2
+        if self._chosen:
+            self.create_oval(x - 5, y - 5, x + 5, y + 5, fill=ACCENT,
+                             outline=ACCENT)
+        else:
+            self.create_oval(x - 6, y - 6, x + 6, y + 6, fill=PANEL,
+                             outline="#c8cfd6")
+
+
+def file_icon(canvas, kind, x, y, colour=MUTED):
+    """
+    A small line drawing for a file type, drawn on `canvas` centred at x, y.
+
+    Fourteen pixels of line art rather than an emoji: emoji come out in full
+    colour on macOS and as a hollow box on some Linux setups, and neither is
+    what this table wants beside a filename.
+    """
+    if kind == "image":
+        canvas.create_rectangle(x - 7, y - 6, x + 7, y + 6, outline=colour)
+        canvas.create_line(x - 5, y + 4, x - 1, y - 1, x + 2, y + 2,
+                           x + 5, y - 2, x + 6, y + 4, fill=colour)
+        canvas.create_oval(x + 1, y - 5, x + 4, y - 2, outline=colour)
+    elif kind == "video":
+        canvas.create_rectangle(x - 7, y - 5, x + 7, y + 5, outline=colour)
+        canvas.create_polygon(x - 2, y - 3, x + 3, y, x - 2, y + 3,
+                              fill=colour, outline=colour)
+    elif kind == "audio":
+        canvas.create_rectangle(x - 2, y - 7, x + 2, y + 1, outline=colour)
+        canvas.create_arc(x - 5, y - 3, x + 5, y + 5, start=200, extent=140,
+                          style="arc", outline=colour)
+        canvas.create_line(x, y + 5, x, y + 7, fill=colour)
+    elif kind == "sheet":
+        canvas.create_rectangle(x - 7, y - 6, x + 7, y + 6, outline=colour)
+        canvas.create_line(x - 7, y - 2, x + 7, y - 2, fill=colour)
+        canvas.create_line(x - 2, y - 6, x - 2, y + 6, fill=colour)
+    elif kind == "archive":
+        canvas.create_rectangle(x - 6, y - 6, x + 6, y + 6, outline=colour)
+        canvas.create_line(x, y - 6, x, y - 3, fill=colour)
+        canvas.create_line(x, y - 1, x, y + 2, fill=colour)
+    else:                                    # a plain document
+        canvas.create_polygon(x - 5, y - 7, x + 2, y - 7, x + 5, y - 4,
+                              x + 5, y + 7, x - 5, y + 7,
+                              fill="", outline=colour)
+        canvas.create_line(x - 2, y - 1, x + 2, y - 1, fill=colour)
+        canvas.create_line(x - 2, y + 2, x + 2, y + 2, fill=colour)
+
+
+ICON_KINDS = {
+    "image": ("jpg", "jpeg", "png", "gif", "bmp", "heic", "cr2", "nef", "arw",
+              "tif", "tiff", "webp", "raw", "dng"),
+    "video": ("mp4", "mov", "m4v", "avi", "mkv", "3gp", "mts", "wmv"),
+    "audio": ("mp3", "m4a", "wav", "aac", "flac", "aiff", "ogg"),
+    "sheet": ("xlsx", "xls", "csv", "numbers", "ods"),
+    "archive": ("zip", "rar", "7z", "gz", "tar", "sparsebundle", "dmg"),
+}
+
+
+def icon_for(name):
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    for kind, extensions in ICON_KINDS.items():
+        if ext in extensions:
+            return kind
+    return "doc"
 
 
 class ThinScrollbar(tk.Canvas):
@@ -494,15 +698,18 @@ class Field(tk.Canvas):
     HEIGHT = CONTROL_H
     RADIUS = RADIUS
 
-    def __init__(self, master, textvariable, font, background=BG, **kw):
+    def __init__(self, master, textvariable, font, background=BG, icon=None,
+                 **kw):
         super().__init__(master, height=self.HEIGHT, highlightthickness=0,
                          bd=0, background=background, **kw)
         self._focused = False
+        self._icon = icon
+        self._text_left = FIELD_PAD + (22 if icon else 0)
         self.entry = tk.Entry(self, textvariable=textvariable, font=font,
                               relief="flat", background=PANEL, foreground=INK,
                               insertbackground=INK, borderwidth=0,
                               highlightthickness=0)
-        self._slot = self.create_window(FIELD_PAD, self.HEIGHT // 2,
+        self._slot = self.create_window(self._text_left, self.HEIGHT // 2,
                                         window=self.entry, anchor="w",
                                         height=self.HEIGHT - 12)
         self.bind("<Configure>", lambda e: self._draw())
@@ -530,60 +737,396 @@ class Field(tk.Canvas):
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
                     fill=PANEL, outline=ACCENT if self._focused else LINE,
                     tags="box")
+        if self._icon == "folder":
+            self._folder(FIELD_PAD + 7, self.HEIGHT // 2)
         self.tag_lower("box")
-        self.itemconfigure(self._slot, width=max(width - FIELD_PAD * 2, 10))
-        self.coords(self._slot, FIELD_PAD, self.HEIGHT // 2)
+        self.itemconfigure(self._slot,
+                           width=max(width - self._text_left - FIELD_PAD, 10))
+        self.coords(self._slot, self._text_left, self.HEIGHT // 2)
+
+    def _folder(self, x, y):
+        self.create_polygon(x - 7, y + 5, x - 7, y - 5, x - 2, y - 5,
+                            x, y - 3, x + 7, y - 3, x + 7, y + 5,
+                            fill="", outline=FAINT, width=1.2, tags="box")
 
 
-class Segmented(tk.Frame):
+class InfoBox(tk.Canvas):
     """
-    A two-option segmented control, bound to a StringVar.
+    The chosen drive's device path, with what the drive is beside it.
 
-    Two radio buttons say "here are two settings". A segmented control says
-    "this application is in one of two modes", which is what choosing between
-    Undelete and Deep scan actually is.
+    The path is the part that identifies a drive beyond doubt - two cards can
+    both be called NO NAME - so it gets its own box in monospace rather than
+    being truncated into the dropdown above it.
     """
 
-    def __init__(self, master, variable, options, command=None, **kw):
-        super().__init__(master, background=SIDEBAR, **kw)
-        self.variable = variable
-        self.command = command
-        self._buttons = {}
-        font = _first_font(master, ["SF Pro Text", "Segoe UI", "Inter",
-                                    "DejaVu Sans"], 11)
-        for index, (value, label) in enumerate(options):
-            button = PillButton(self, label, kind="ghost", font=font,
-                                background=SIDEBAR,
-                                command=lambda v=value: self._choose(v))
-            button.grid(row=index, column=0, sticky="we",
-                        pady=(0, 8 if index == 0 else 0))
-            self.columnconfigure(0, weight=1)
-            self._buttons[value] = button
-        self._paint()
+    HEIGHT = CONTROL_H
 
-    def _choose(self, value):
-        self.variable.set(value)
-        self._paint()
-        if self.command:
-            self.command()
+    def __init__(self, master, path_var, meta_var, mono, small,
+                 background=SIDEBAR, **kw):
+        super().__init__(master, height=self.HEIGHT, highlightthickness=0,
+                         bd=0, background=background, **kw)
+        self.path_var, self.meta_var = path_var, meta_var
+        self._mono, self._small = mono, small
+        self.bind("<Configure>", lambda e: self._draw())
+        for var in (path_var, meta_var):
+            var.trace_add("write", lambda *_: self._draw())
 
-    def _paint(self):
-        chosen = self.variable.get()
-        for value, button in self._buttons.items():
-            button.kind = "primary" if value == chosen else "ghost"
-            button._draw()
+    def _draw(self):
+        self.delete("all")
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, RADIUS,
+                    fill=PANEL, outline=LINE)
+        meta = self.meta_var.get()
+        room = width - FIELD_PAD * 2
+        if meta:
+            measure = tkfont.Font(font=self._small)
+            meta = ResultTable._fit(meta, width // 2 - FIELD_PAD, self._small)
+            self.create_text(width - FIELD_PAD, self.HEIGHT // 2, text=meta,
+                             anchor="e", fill=FAINT, font=self._small)
+            room -= measure.measure(meta) + 10
+        self.create_text(FIELD_PAD, self.HEIGHT // 2,
+                         text=ResultTable._fit(self.path_var.get(), room,
+                                               self._mono),
+                         anchor="w", fill=MUTED, font=self._mono)
 
 
-# What the Condition column says. Blank where we have no opinion - an
-# unrecognised file type gets no verdict rather than a guess.
-CONDITION_TEXT = {
-    signatures.MATCH: "\u25cf  looks intact",
-    signatures.MISMATCH: "\u25cb  content gone",
-    signatures.BLANK: "\u25cb  space is empty",
-    signatures.MOVED: "\u21a9  in the Trash, not deleted",
-    signatures.IN_USE: "\u25d0  space reused, may work",
-    signatures.UNKNOWN: "",
-}
+class ResultTable(tk.Frame):
+    """
+    The results, drawn rather than tabulated.
+
+    ttk's Treeview colours a whole row or nothing, so the chance of getting a
+    file back could only ever be a word in a column - and a wash of red
+    across the filename is exactly what makes a list like this hard to read.
+    Drawing the rows gives each one a pill, an icon and a checkbox, and none
+    of it costs the reader legibility of the thing they came for: the name.
+
+    Only the rows on screen are drawn, so a deep scan that turns up eighty
+    thousand files scrolls at the same speed as one that turns up eight.
+
+    Keeps the slice of the Treeview API the window already used - the rows
+    are addressed by index as strings - so selection and recovery did not
+    have to learn a new vocabulary.
+    """
+
+    COLUMNS = (
+        # key, heading, width (0 = share what is left), alignment
+        ("check", "", 46, "w"),
+        ("name", "FILE NAME", 0, "w"),
+        ("folder", "ORIGINAL FOLDER", 0, "w"),
+        ("size", "SIZE", 96, "e"),
+        ("deleted", "DELETED", 124, "w"),
+        ("chance", "CHANCE", 132, "e"),
+    )
+
+    def __init__(self, master, fonts, on_select=None, on_sort=None, **kw):
+        super().__init__(master, background=PANEL, highlightthickness=1,
+                         highlightbackground=LINE, **kw)
+        self.fonts = fonts
+        self.on_select = on_select
+        self.on_sort = on_sort
+        self._rows = []
+        self._selected = set()
+        self._offset = 0.0
+        self._sort_key = None
+        self._sort_reverse = False
+
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        self.head = tk.Canvas(self, height=HEAD_H, highlightthickness=0, bd=0,
+                              background=STRIPE)
+        self.head.grid(row=0, column=0, columnspan=2, sticky="we")
+        self.head.bind("<Configure>", lambda e: self._draw_head())
+        self.head.bind("<Button-1>", self._head_click)
+
+        self.body = tk.Canvas(self, highlightthickness=0, bd=0,
+                              background=PANEL)
+        self.body.grid(row=1, column=0, sticky="nsew")
+        self.body.bind("<Configure>", lambda e: self.redraw())
+        self.body.bind("<Button-1>", self._body_click)
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.body.bind(sequence, self._wheel)
+
+        self.bar = ThinScrollbar(self, command=self.yview, background=PANEL)
+        self.bar.grid(row=1, column=1, sticky="ns", padx=(0, 4), pady=4)
+
+        self.foot = tk.Frame(self, background=STRIPE, height=FOOT_H)
+        self.foot.grid(row=2, column=0, columnspan=2, sticky="we")
+        self.foot.grid_propagate(False)
+        self.foot.columnconfigure(0, weight=1)
+        tk.Frame(self.foot, background=LINE, height=1).grid(
+            row=0, column=0, columnspan=2, sticky="we")
+        self.count_var = tk.StringVar()
+        self.promise_var = tk.StringVar(
+            value="read-only  \u00b7  source drive untouched")
+        tk.Label(self.foot, textvariable=self.count_var, background=STRIPE,
+                 foreground=MUTED, font=fonts["small"]).grid(
+            row=1, column=0, sticky="w", padx=FIELD_PAD + 2)
+        tk.Label(self.foot, textvariable=self.promise_var, background=STRIPE,
+                 foreground=FAINT, font=fonts["small"]).grid(
+            row=1, column=1, sticky="e", padx=FIELD_PAD + 2)
+
+    # -- geometry -----------------------------------------------------------
+    def _layout(self, width):
+        """Left edge and width of every column, for a table this wide."""
+        fixed = sum(c[2] for c in self.COLUMNS)
+        share = max(width - fixed - 8, 240)
+        flexible = [c for c in self.COLUMNS if c[2] == 0]
+        # The filename gets more of the spare room than the folder: it is
+        # what people search by and what they read down the list.
+        weights = {"name": 0.56, "folder": 0.44}
+        spans, x = {}, 0
+        for key, _, fixed_width, align in self.COLUMNS:
+            span = fixed_width or int(share * weights.get(key, 1 / len(flexible)))
+            spans[key] = (x, span, align)
+            x += span
+        return spans
+
+    # -- the heading band ---------------------------------------------------
+    def _draw_head(self):
+        self.head.delete("all")
+        width = self.head.winfo_width()
+        if width <= 1:
+            return
+        self.head.create_line(0, HEAD_H - 1, width, HEAD_H - 1, fill=LINE)
+        spans = self._layout(width)
+        for key, title, _, align in self.COLUMNS:
+            if not title:
+                continue
+            x, span, _ = spans[key]
+            arrow = ""
+            if key == self._sort_key:
+                arrow = "  \u2193" if self._sort_reverse else "  \u2191"
+            if align == "e":
+                self.head.create_text(x + span - FIELD_PAD, HEAD_H // 2,
+                                      text=title + arrow, anchor="e",
+                                      fill=MUTED, font=self.fonts["section"])
+            else:
+                self.head.create_text(x + FIELD_PAD, HEAD_H // 2,
+                                      text=title + arrow, anchor="w",
+                                      fill=MUTED, font=self.fonts["section"])
+
+    def _head_click(self, event):
+        if not self.on_sort:
+            return
+        spans = self._layout(self.head.winfo_width())
+        for key, title, _, _ in self.COLUMNS:
+            if not title:
+                continue
+            x, span, _ = spans[key]
+            if x <= event.x < x + span:
+                self.on_sort(key)
+                return
+
+    def mark_sorted(self, key, reverse):
+        self._sort_key, self._sort_reverse = key, reverse
+        self._draw_head()
+
+    # -- rows ---------------------------------------------------------------
+    def set_rows(self, rows, keep_selection=False):
+        """`rows` is a list of dicts, one per line, already formatted."""
+        self._rows = rows
+        if not keep_selection:
+            self._selected = set()
+        else:
+            self._selected = {i for i in self._selected if i < len(rows)}
+        self._offset = min(self._offset, max(0, len(rows) - 1))
+        self.redraw()
+        self._announce()
+
+    def redraw(self):
+        self.body.delete("all")
+        width, height = self.body.winfo_width(), self.body.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        spans = self._layout(width)
+        first = int(self._offset)
+        y = -int((self._offset - first) * ROW_H)
+        index = first
+        while y < height and index < len(self._rows):
+            self._draw_row(index, y, width, spans)
+            y += ROW_H
+            index += 1
+        self._sync_bar()
+
+    def _draw_row(self, index, y, width, spans):
+        row = self._rows[index]
+        chosen = index in self._selected
+        c = self.body
+        if chosen:
+            c.create_rectangle(0, y, width, y + ROW_H, fill=ACCENT_SOFT,
+                               outline="")
+        c.create_line(0, y + ROW_H - 1, width, y + ROW_H - 1, fill=LINE)
+        middle = y + ROW_H // 2
+
+        # the tick box
+        x = spans["check"][0] + 17
+        _round_rect(c, x - 8, middle - 8, x + 9, middle + 9, 5,
+                    fill=ACCENT if chosen else PANEL,
+                    outline=ACCENT if chosen else "#c8cfd6")
+        if chosen:
+            c.create_line(x - 4, middle, x - 1, middle + 4, x + 5, middle - 4,
+                          fill="#ffffff", width=2, capstyle="round",
+                          joinstyle="round")
+
+        # name, with the icon for its type
+        x, span, _ = spans["name"]
+        file_icon(c, row["icon"], x + FIELD_PAD + 7, middle, FAINT)
+        c.create_text(x + FIELD_PAD + 24, middle,
+                      text=self._fit(row["name"], span - FIELD_PAD - 32,
+                                     self.fonts["body"]),
+                      anchor="w", fill=INK, font=self.fonts["body"])
+
+        # the folder it came from, in mono - a path reads as a path
+        x, span, _ = spans["folder"]
+        c.create_text(x + FIELD_PAD, middle,
+                      text=self._fit(row["folder"], span - FIELD_PAD * 2,
+                                     self.fonts["mono"]),
+                      anchor="w", fill=MUTED, font=self.fonts["mono"])
+
+        x, span, _ = spans["size"]
+        c.create_text(x + span - FIELD_PAD, middle, text=row["size"],
+                      anchor="e", fill=INK, font=self.fonts["small"])
+
+        x, span, _ = spans["deleted"]
+        c.create_text(x + FIELD_PAD, middle, text=row["deleted"], anchor="w",
+                      fill=MUTED, font=self.fonts["small"])
+
+        x, span, _ = spans["chance"]
+        self._pill(x + span - FIELD_PAD, middle, row["chance"], row["kind"])
+
+    def _pill(self, right, middle, label, kind):
+        fill, ink, dot = PILL_STYLES.get(kind, PILL_STYLES["grey"])
+        measure = tkfont.Font(font=self.fonts["small"])
+        width = measure.measure(label) + 34
+        left = right - width
+        _round_rect(self.body, left, middle - 11, right, middle + 11, 11,
+                    fill=fill, outline="")
+        self.body.create_oval(left + 10, middle - 3, left + 16, middle + 3,
+                              fill=dot, outline=dot)
+        self.body.create_text(left + 22, middle, text=label, anchor="w",
+                              fill=ink, font=self.fonts["small"])
+
+    @staticmethod
+    def _fit(text, room, font):
+        """Cut a string to fit, with an ellipsis so the cut is visible."""
+        measure = tkfont.Font(font=font)
+        if room <= 8 or measure.measure(text) <= room:
+            return text
+        while text and measure.measure(text + "\u2026") > room:
+            text = text[:-1]
+        return text + "\u2026"
+
+    # -- selection ----------------------------------------------------------
+    def _body_click(self, event):
+        index = int(self._offset) + (event.y + int(
+            (self._offset - int(self._offset)) * ROW_H)) // ROW_H
+        if not 0 <= index < len(self._rows):
+            return
+        if index in self._selected:
+            self._selected.discard(index)
+        else:
+            self._selected.add(index)
+        self.redraw()
+        self._announce()
+
+    def selection(self):
+        return tuple(str(i) for i in sorted(self._selected))
+
+    def selection_set(self, *items):
+        flat = []
+        for item in items:
+            flat.extend(item if isinstance(item, (list, tuple)) else [item])
+        self._selected = {int(i) for i in flat if int(i) < len(self._rows)}
+        self.redraw()
+        self._announce()
+
+    def select_all(self):
+        self._selected = set(range(len(self._rows)))
+        self.redraw()
+        self._announce()
+
+    def get_children(self):
+        return tuple(str(i) for i in range(len(self._rows)))
+
+    def _announce(self):
+        shown = len(self._rows)
+        picked = len(self._selected)
+        self.count_var.set(
+            f"{shown:,} shown  \u00b7  {picked:,} selected" if picked
+            else f"{shown:,} shown")
+        if self.on_select:
+            self.on_select()
+
+    # -- scrolling ----------------------------------------------------------
+    def _rows_on_screen(self):
+        return max(self.body.winfo_height() // ROW_H, 1)
+
+    def _max_offset(self):
+        return max(0.0, len(self._rows) - self._rows_on_screen())
+
+    def yview(self, *args):
+        if not args:
+            return self._fractions()
+        how = args[0]
+        if how == "moveto":
+            self._offset = float(args[1]) * max(len(self._rows), 1)
+        elif how == "scroll":
+            step = int(args[1])
+            self._offset += step * (self._rows_on_screen()
+                                    if args[2] == "pages" else 1)
+        self._offset = max(0.0, min(self._offset, self._max_offset()))
+        self.redraw()
+        return None
+
+    def yview_scroll(self, step, what="units"):
+        return self.yview("scroll", step, what)
+
+    def _fractions(self):
+        total = max(len(self._rows), 1)
+        first = self._offset / total
+        last = min((self._offset + self._rows_on_screen()) / total, 1.0)
+        return first, last
+
+    def _sync_bar(self):
+        self.bar.set(*self._fractions())
+
+    def _wheel(self, event):
+        if getattr(event, "num", 0) in (4, 5):
+            step = -1 if event.num == 4 else 1
+        elif abs(event.delta) >= 120:
+            step = -event.delta // 120
+        else:
+            step = -event.delta
+        self.yview("scroll", int(step), "units")
+        return "break"
+
+
+# What the Chance column says. The word is the score, mapped - never a
+# friendlier version of it - and where the file's own first bytes have
+# something to say, they say it instead: "Overwritten" is a fact, and
+# dressing it up as a low percentage helps nobody.
+def chance_pill(found):
+    """(label, pill style) for one result."""
+    verdict = getattr(found, "content_check", None)
+    if verdict == signatures.MISMATCH:
+        return "Overwritten", "grey"
+    if verdict == signatures.BLANK:
+        return "Empty space", "grey"
+    if verdict == signatures.MOVED:
+        return "In Trash", "good"
+    if verdict == signatures.IN_USE:
+        return "Space reused", "fair"
+    chance = found.chance if found.chance is not None else 100
+    if chance >= 90:
+        return "Excellent", "excellent"
+    if chance >= 70:
+        return "Good", "good"
+    if chance >= 40:
+        return "Fair", "fair"
+    return "Poor", "poor"
 
 
 class App:
@@ -603,7 +1146,10 @@ class App:
         self.disk = None
         self.sort_column = None
         self.sort_reverse = False
-        self.status_var = tk.StringVar(value="Ready.")
+        self.status_var = tk.StringVar(value="Nothing scanned yet")
+        self._scan_started = None
+        self._scan_ended = None
+        self._scan_took = 0.0
         self.subtitle_var = tk.StringVar(
             value="Pick a drive and press Start scan.")
 
@@ -645,28 +1191,15 @@ class App:
                     font=self.font_title)
         s.configure("Sub.TLabel", background=BG, foreground=MUTED,
                     font=self.font_small)
-        s.configure("Status.TLabel", background=BG, foreground=MUTED,
+        s.configure("Status.TLabel", background=SIDEBAR, foreground=FAINT,
                     font=self.font_small)
 
-        # Entries, comboboxes and checkbuttons are all drawn by this app now
-        # (Field, Dropdown, CheckBox), so there is nothing left here to style
-        # from the platform theme except the table and the progress bar.
-        s.configure("Treeview", background=PANEL, fieldbackground=PANEL,
-                    foreground=INK, rowheight=32, borderwidth=0,
-                    font=self.font_body)
-        # A tinted heading band rather than a border under it: the heading
-        # is inside the Treeview, so there is nowhere to put a line between
-        # it and the first row. A wash of colour separates them just as well.
-        s.configure("Treeview.Heading", background=STRIPE, foreground=MUTED,
-                    relief="flat", borderwidth=0, padding=(12, 11),
-                    font=self.font_section)
-        s.map("Treeview.Heading", background=[("active", ACCENT_SOFT)],
-              foreground=[("active", INK)])
-        s.map("Treeview", background=[("selected", ACCENT_SOFT)],
-              foreground=[("selected", INK)])
-
+        # Nothing else in this window is a ttk widget any more: the table,
+        # the fields, the buttons, the dropdown and the checkboxes are all
+        # drawn by this app, because no platform theme will round a corner
+        # or draw a one-pixel border. The progress bar is the last holdout.
         s.configure("Thin.Horizontal.TProgressbar", troughcolor=LINE,
-                    background=ACCENT, borderwidth=0, thickness=6)
+                    background=ACCENT, borderwidth=0, thickness=4)
 
     # -- the window ---------------------------------------------------------
     def _build(self):
@@ -690,7 +1223,7 @@ class App:
         part people actually spend their time reading.
 
         Every control in it is the full width of the rail and the same
-        height. A rail of buttons that each stop at a different place reads
+        height. A rail of controls that each stop at a different place reads
         as an unfinished form; one flush column reads as a panel.
         """
         rail = tk.Frame(self.root, background=SIDEBAR, width=RAIL_W)
@@ -702,10 +1235,10 @@ class App:
         tk.Frame(self.root, background=LINE, width=1).grid(
             row=0, column=0, sticky="nse")
 
-        # The settings scroll; the two scan controls do not. In deep-scan
-        # mode the file-type list makes the rail taller than a 720-pixel
-        # window, and the button that starts the scan is the last thing that
-        # should be pushed off the bottom of the screen to make room.
+        # The settings scroll; the scan button does not. In deep-scan mode
+        # the file-type list makes the rail taller than a 720-pixel window,
+        # and the button that starts the scan is the last thing that should
+        # be pushed off the bottom of the screen to make room.
         view = tk.Canvas(rail, background=SIDEBAR, highlightthickness=0, bd=0)
         view.grid(row=0, column=0, sticky="nsew")
         self._rail_bar = ThinScrollbar(rail, command=view.yview,
@@ -720,18 +1253,18 @@ class App:
                      lambda e: view.configure(scrollregion=view.bbox("all")))
         self._rail_view = view
 
-        pad = GUTTER
+        pad = GUTTER - 4
         text_width = RAIL_W - pad * 2
         content.columnconfigure(0, weight=1)
         self._rail_row = 0
 
         def place(widget, top=0, bottom=0, fill=True):
             widget.grid(row=self._rail_row, column=0,
-                        sticky="we" if fill else "w",
+                        sticky="we" if fill else "",
                         # The scrollbar lives in its own column beside the
-                        # canvas, so the right pad has to give that width
-                        # back - otherwise everything in the scrolling part
-                        # sits two pixels narrower than the buttons below it.
+                        # canvas, so the right pad gives that width back -
+                        # otherwise everything in the scrolling part sits
+                        # narrower than the button below it.
                         padx=(pad, pad - ThinScrollbar.WIDTH),
                         pady=(top, bottom))
             self._rail_row += 1
@@ -743,18 +1276,17 @@ class App:
                            foreground=FAINT, font=self.font_section,
                            anchor="w"), top=top, bottom=8)
 
-        # --- brand
+        # --- brand and the promise the whole program rests on
         brand = tk.Frame(content, background=SIDEBAR)
-        tk.Label(brand, text=APP_NAME, background=SIDEBAR, foreground=INK,
+        tk.Label(brand, text=APP_NAME, background=SIDEBAR, foreground=ACCENT,
                  font=self.font_title).pack(side="left")
         tk.Label(brand, text=VERSION, background=SIDEBAR, foreground=FAINT,
                  font=self.font_small).pack(side="left", padx=(7, 0),
                                             pady=(9, 0))
-        place(brand, top=26, bottom=4)
-        place(tk.Label(content, text="Read-only. Your files are never touched.",
-                       background=SIDEBAR, foreground=MUTED,
-                       font=self.font_small, wraplength=text_width,
-                       anchor="w", justify="left"), bottom=24)
+        place(brand, top=22, bottom=14)
+        place(Badge(content,
+                    "Read-only mode. Your source drive is never written to.",
+                    self.font_small, background=SIDEBAR), bottom=20)
 
         # --- drive
         section("DRIVE", top=0)
@@ -768,21 +1300,30 @@ class App:
         # this narrow truncates a long label without saying so, and the tail
         # is exactly the part that identifies the drive.
         self.drive_detail = tk.StringVar()
-        place(tk.Label(content, textvariable=self.drive_detail,
-                       background=SIDEBAR, foreground=FAINT,
-                       font=self.font_mono, anchor="w", justify="left",
-                       wraplength=text_width), bottom=10)
-        place(PillButton(content, "Refresh drives", kind="ghost",
-                         font=self.font_small, background=SIDEBAR,
-                         command=self._refresh_drives), bottom=22)
+        self.drive_meta = tk.StringVar()
+        self.detail_box = place(
+            InfoBox(content, self.drive_detail, self.drive_meta,
+                    self.font_mono, self.font_small, background=SIDEBAR),
+            bottom=6)
+        place(LinkButton(content, "Refresh drives", self._refresh_drives,
+                         font=self.font_small, background=SIDEBAR),
+              bottom=20, fill=False)
 
         # --- mode
-        section("MODE", top=0)
+        section("SCAN MODE", top=0)
         self.mode_var = tk.StringVar(value="undelete")
-        place(Segmented(content, self.mode_var,
-                        [("undelete", "Undelete  \u00b7  keeps filenames"),
-                         ("carve", "Deep scan  \u00b7  any drive")],
-                        command=self._toggle_mode), bottom=22)
+        self.mode_cards = {}
+        for value, title, blurb, gap in (
+                ("undelete", "Undelete", "Fast. Keeps original filenames.", 8),
+                ("carve", "Deep scan", "Slow. Any drive, names may be lost.",
+                 20)):
+            card = ModeCard(content, title, blurb,
+                            chosen=value == self.mode_var.get(),
+                            title_font=self.font_body,
+                            blurb_font=self.font_small,
+                            background=SIDEBAR,
+                            command=lambda v=value: self._choose_mode(v))
+            self.mode_cards[value] = place(card, bottom=gap)
 
         # --- file types, only relevant to deep scan
         self.types_row = tk.Frame(content, background=SIDEBAR)
@@ -798,19 +1339,17 @@ class App:
             CheckBox(self.types_row, ext, var, font=self.font_small,
                      background=SIDEBAR).grid(
                 row=1 + i // 3, column=i % 3, sticky="w", pady=1)
-        place(self.types_row, bottom=22)
+        place(self.types_row, bottom=20)
 
         # --- destination
         section("RECOVER TO", top=0)
         self.dest_var = tk.StringVar(
             value=os.path.join(os.path.expanduser("~"), "Recovered"))
         place(Field(content, self.dest_var, self.font_small,
-                    background=SIDEBAR), bottom=8)
-        place(PillButton(content, "Choose folder\u2026", kind="ghost",
-                         font=self.font_small, background=SIDEBAR,
-                         command=self._pick_dest), bottom=20)
-
-        place(tk.Frame(content, background=SIDEBAR, height=4), bottom=0)
+                    background=SIDEBAR, icon="folder"), bottom=6)
+        place(LinkButton(content, "Choose folder\u2026", self._pick_dest,
+                         font=self.font_small, background=SIDEBAR),
+              bottom=18, fill=False)
 
         # --- the footer, outside the scrolling part
         footer = tk.Frame(rail, background=SIDEBAR)
@@ -827,8 +1366,17 @@ class App:
                                    kind="ghost", font=self.font_small,
                                    background=SIDEBAR)
         self.stop_btn.grid(row=2, column=0, sticky="we", padx=pad,
-                           pady=(0, 20))
+                           pady=(0, 8))
         self.stop_btn["state"] = "disabled"
+        self.stop_btn.grid_remove()          # only while a scan is running
+        self.progress = ttk.Progressbar(
+            footer, mode="determinate", style="Thin.Horizontal.TProgressbar")
+        self.progress.grid(row=3, column=0, sticky="we", padx=pad,
+                           pady=(0, 8))
+        self.progress.grid_remove()
+        tk.Label(footer, textvariable=self.status_var, background=SIDEBAR,
+                 foreground=FAINT, font=self.font_small,
+                 wraplength=text_width).grid(row=4, column=0, pady=(0, 18))
 
         self._bind_wheel(rail)
         self._refresh_drives()
@@ -858,6 +1406,12 @@ class App:
         self._rail_view.yview_scroll(int(step), "units")
         return "break"
 
+    def _choose_mode(self, value):
+        self.mode_var.set(value)
+        for name, card in self.mode_cards.items():
+            card.set_chosen(name == value)
+        self._toggle_mode()
+
     def _build_main(self):
         main = tk.Frame(self.root, background=BG)
         main.grid(row=0, column=1, sticky="nsew")
@@ -874,7 +1428,7 @@ class App:
             row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.subtitle_var,
                   style="Sub.TLabel").grid(row=1, column=0, sticky="w",
-                                           pady=(3, 0))
+                                           pady=(4, 0))
         # Spanning both rows centres it against the title and its subtitle
         # together, rather than leaving it hanging off the top line.
         self.recover_btn = PillButton(header, "Recover selected",
@@ -885,7 +1439,7 @@ class App:
 
         # --- filter bar
         bar = tk.Frame(main, background=BG)
-        bar.grid(row=1, column=0, sticky="we", padx=GUTTER, pady=(18, 12))
+        bar.grid(row=1, column=0, sticky="we", padx=GUTTER, pady=(20, 12))
         bar.columnconfigure(0, weight=1)
         self.search_var = tk.StringVar()
         wrap = Field(bar, self.search_var, self.font_body, background=BG)
@@ -895,7 +1449,7 @@ class App:
         entry.bind("<Escape>", lambda e: self.search_var.set(""))
         # Tk has no placeholder, so it is one written in and taken back out
         # again. Kept in a variable the filter knows to ignore.
-        self._placeholder = "Search by file name or folder"
+        self._placeholder = "Filter by name or folder"
         self._placeholder_on = True
         entry.insert(0, self._placeholder)
 
@@ -927,45 +1481,18 @@ class App:
         self.select_all_btn.grid(row=0, column=2)
 
         # --- results
-        table = tk.Frame(main, background=PANEL, highlightthickness=1,
-                         highlightbackground=LINE)
-        table.grid(row=2, column=0, sticky="nsew", padx=GUTTER)
-        table.columnconfigure(0, weight=1)
-        table.rowconfigure(0, weight=1)
-
-        cols = ("name", "folder", "size", "deleted", "chance", "condition")
-        self.tree = ttk.Treeview(table, columns=cols, show="headings",
-                                 selectmode="extended")
-        headings = {"name": "File name", "folder": "Original folder",
-                    "size": "Size", "deleted": "Deleted",
-                    "chance": "Chance", "condition": "Condition"}
-        widths = {"name": 260, "folder": 240, "size": 96,
-                  "deleted": 140, "chance": 84, "condition": 184}
-        self._headings = headings
-        for c in cols:
-            self.tree.heading(c, text=headings[c],
-                              command=lambda col=c: self._sort(col))
-            self.tree.column(c, width=widths[c], minwidth=64,
-                             anchor="e" if c in ("size", "chance") else "w")
-        self.tree.grid(row=0, column=0, sticky="nsew", padx=(6, 0))
-
-        vs = ThinScrollbar(table, command=self.tree.yview, background=PANEL)
-        vs.grid(row=0, column=1, sticky="ns", padx=(0, 4), pady=4)
-        self.tree.configure(yscrollcommand=vs.set)
-
-        # Colouring a whole row in red or green shouts. A faint wash carries
-        # the same meaning without making the filename - the thing people are
-        # actually reading - hard to read.
-        self.tree.tag_configure("good", foreground=INK)
-        self.tree.tag_configure("partial", foreground=INK, background=WASH_WARN)
-        self.tree.tag_configure("gone", foreground=MUTED, background=WASH_BAD)
-        self.tree.tag_configure("stripe", background=STRIPE)
-        self.tree.bind("<<TreeviewSelect>>", lambda e: self._update_buttons())
+        self.tree = ResultTable(main, {"body": self.font_body,
+                                       "small": self.font_small,
+                                       "mono": self.font_mono,
+                                       "section": self.font_section},
+                                on_select=self._update_buttons,
+                                on_sort=self._sort)
+        self.tree.grid(row=2, column=0, sticky="nsew", padx=GUTTER)
 
         # Shown over the table whenever there is nothing in it. A blank white
         # rectangle tells the user nothing about whether the app is working,
         # still thinking, or finished and empty-handed.
-        self.empty = tk.Frame(table, background=PANEL)
+        self.empty = tk.Frame(self.tree.body, background=PANEL)
         self.empty_title = tk.StringVar()
         self.empty_hint = tk.StringVar()
         tk.Label(self.empty, textvariable=self.empty_title, background=PANEL,
@@ -977,17 +1504,22 @@ class App:
                         "Choose a drive on the left, then press Start scan.")
         self._show_empty(True)          # the window opens with nothing in it
 
-        # --- status strip
-        status = tk.Frame(main, background=BG)
-        status.grid(row=3, column=0, sticky="we", padx=GUTTER, pady=(14, 20))
-        status.columnconfigure(0, weight=1)
-        ttk.Label(status, textvariable=self.status_var,
-                  style="Status.TLabel").grid(row=0, column=0, sticky="w")
-        self.progress = ttk.Progressbar(
-            status, length=ACTION_W, mode="determinate",
-            style="Thin.Horizontal.TProgressbar")
-        self.progress.grid(row=0, column=1, sticky="e")
-        self.progress.grid_remove()          # only while something is running
+        # --- the admin warning, which only appears when it applies
+        self.warning = tk.Frame(main, background=BG)
+        self.warning.grid(row=3, column=0, sticky="we", padx=GUTTER,
+                          pady=(12, 18))
+        mark = tk.Canvas(self.warning, width=16, height=16,
+                         highlightthickness=0, bd=0, background=BG)
+        mark.create_polygon(8, 1, 15, 14, 1, 14, fill="", outline=WARN,
+                            width=1.4)
+        mark.create_line(8, 5, 8, 9, fill=WARN, width=1.4)
+        mark.create_line(8, 11, 8, 11.5, fill=WARN, width=1.6)
+        mark.grid(row=0, column=0, padx=(0, 8))
+        self.warning_var = tk.StringVar()
+        tk.Label(self.warning, textvariable=self.warning_var, background=BG,
+                 foreground=MUTED, font=self.font_small, anchor="w").grid(
+            row=0, column=1, sticky="w")
+        self.warning.grid_remove()
 
     def _check_privileges(self):
         elevated = True
@@ -1000,12 +1532,16 @@ class App:
         except Exception:
             pass
         if not elevated:
-            self.status_var.set(
-                "Not running with admin rights - scanning will fail. "
-                + ("Restart as Administrator." if sys.platform == "win32"
-                   else "Restart with sudo."))
+            self.warning_var.set(
+                "Not running with admin rights \u2014 raw device scans will "
+                "fail. " + ("Restart as Administrator to enable scanning."
+                            if sys.platform == "win32"
+                            else "Restart with  sudo  to enable scanning."))
+            self.warning.grid()
 
     def _toggle_mode(self):
+        for name, card in getattr(self, "mode_cards", {}).items():
+            card.set_chosen(name == self.mode_var.get())
         if self.mode_var.get() == "carve":
             self.types_row.grid()
         else:
@@ -1063,8 +1599,11 @@ class App:
         for label, path in self.volumes:
             if self._short_label(label) == chosen:
                 self.drive_detail.set(path)
+                parts = label.split(diskio.PART)
+                self.drive_meta.set(parts[1] if len(parts) > 1 else "")
                 return
         self.drive_detail.set("")
+        self.drive_meta.set("")
 
     def _source_path(self):
         name = self.drive_var.get()
@@ -1138,15 +1677,17 @@ class App:
             return
 
         self.results.clear()
-        self.tree.delete(*self.tree.get_children())
+        self.tree.set_rows([])
         self.stop_flag.clear()
         self.scanning = True
         self.scan_btn["state"] = "disabled"
-        self.scan_btn["text"] = "Scanning..."
+        self.scan_btn["text"] = "Scanning\u2026"
         self.stop_btn["state"] = "normal"
+        self.stop_btn.grid()
         self.recover_btn["state"] = "disabled"
         self.progress["value"] = 0
         self.progress.grid()
+        self._scan_started = time.time()
 
         threading.Thread(target=self._worker, args=(source,),
                          daemon=True).start()
@@ -1235,6 +1776,13 @@ class App:
         self._apply_filter()
 
     def _apply_filter(self):
+        # Which files were ticked, by identity rather than by row number.
+        # Filtering and sorting both renumber the rows, and someone who has
+        # ticked forty photographs and then types in the search box should
+        # not come back to find the ticks gone.
+        picked = {id(self.visible[int(i)]) for i in self.tree.selection()
+                  if int(i) < len(self.visible)} if self.visible else set()
+
         term = self.search_var.get().strip().lower()
         if getattr(self, "_placeholder_on", False):
             term = ""
@@ -1253,21 +1801,27 @@ class App:
         if self.sort_column:
             self._do_sort()
 
-        self.tree.delete(*self.tree.get_children())
-        for i, f in enumerate(self.visible[:20000]):
-            chance = f.chance if f.chance is not None else 100
-            tag = "good" if chance >= 80 else "partial" if chance >= 40 else "gone"
-            # Banded rows: the eye loses its place tracking a filename across
-            # six columns of a long list otherwise.
-            tags = (tag, "stripe") if i % 2 else (tag,)
-            self.tree.insert("", "end", iid=str(i), tags=tags, values=(
-                f.name,
-                f.path or "",
-                human_size(f.size),
-                human_date(getattr(f, "deleted_at", None)),
-                f"{chance}%",
-                CONDITION_TEXT.get(getattr(f, "content_check", None), ""),
-            ))
+        rows = []
+        for f in self.visible[:20000]:
+            label, kind = chance_pill(f)
+            folder = f.path or ""
+            if folder in recovery.NOT_A_FOLDER:
+                folder = "unknown (carved)"
+            rows.append({
+                "icon": icon_for(f.name),
+                "name": f.name,
+                "folder": folder,
+                "size": human_size(f.size),
+                "deleted": human_date(getattr(f, "deleted_at", None)) or "\u2013",
+                "chance": label,
+                "kind": kind,
+            })
+        self.tree.set_rows(rows)
+        if picked:
+            still_here = [str(i) for i, f in enumerate(self.visible[:20000])
+                          if id(f) in picked]
+            if still_here:
+                self.tree.selection_set(still_here)
 
         shown = len(self.visible)
         total = len(self.results)
@@ -1289,10 +1843,17 @@ class App:
                             "file records, and finds different things.")
             self._show_empty(True)
         extra = "  ·  showing the first 20,000" if shown > 20000 else ""
-        if total:
+        mode = "Undelete" if self.mode_var.get() == "undelete" else "Deep"
+        drive = self.drive_var.get().split(diskio.PART)[0].strip() or "this drive"
+        if total and self.scanning:
             self.subtitle_var.set(
-                f"{shown:,} of {total:,} found{extra}"
-                if shown != total else f"{total:,} found{extra}")
+                f"{mode} scan of {drive} running \u2014 "
+                f"{total:,} found so far{extra}")
+        elif total:
+            found = (f"{total:,} recoverable entries found" if shown == total
+                     else f"showing {shown:,} of {total:,} found")
+            self.subtitle_var.set(
+                f"{mode} scan of {drive} finished \u2014 {found}{extra}")
         else:
             self.subtitle_var.set("Pick a drive and press Start scan.")
         self.status_var.set(
@@ -1306,7 +1867,7 @@ class App:
 
     def _show_empty(self, showing):
         if showing:
-            self.empty.place(relx=0.5, rely=0.45, anchor="center")
+            self.empty.place(relx=0.5, rely=0.42, anchor="center")
         else:
             self.empty.place_forget()
 
@@ -1325,11 +1886,7 @@ class App:
         A table that reorders itself with no indication of what it just did
         looks like it lost the results rather than sorted them.
         """
-        for name, text in self._headings.items():
-            arrow = ""
-            if name == self.sort_column:
-                arrow = "  \u2193" if self.sort_reverse else "  \u2191"
-            self.tree.heading(name, text=text + arrow)
+        self.tree.mark_sorted(self.sort_column, self.sort_reverse)
 
     def _do_sort(self):
         keys = {
@@ -1348,7 +1905,7 @@ class App:
             pass
 
     def _select_all(self):
-        self.tree.selection_set(self.tree.get_children())
+        self.tree.select_all()
 
     def _update_buttons(self):
         # Deliberately not gated on the scan being finished. Deep scan streams
@@ -1357,8 +1914,12 @@ class App:
         # already in hand is just a locked door. Anything that would need to
         # read the drive again is turned away in _recover instead, where we
         # know which files were picked.
-        self.recover_btn["state"] = ("normal" if self.tree.selection()
-                                     else "disabled")
+        picked = len(self.tree.selection())
+        self.recover_btn["state"] = "normal" if picked else "disabled"
+        # The button says how many, so nobody has to count the ticks back up
+        # the list before pressing the one control that writes anything.
+        self.recover_btn["text"] = (f"Recover {picked:,} selected" if picked
+                                    else "Recover selected")
 
     # ----------------------------------------------------------- recovery
     def _recover(self):
@@ -1498,20 +2059,39 @@ class App:
                 elif kind == "done":
                     self.scanning = False
                     self.scan_btn["state"] = "normal"
-                    self.scan_btn["text"] = "Start scan"
+                    self.scan_btn["text"] = "Rescan drive"
                     self.stop_btn["state"] = "disabled"
+                    self.stop_btn.grid_remove()
                     self.progress["value"] = 100
                     self.progress.grid_remove()
+                    self._scan_took = time.time() - (self._scan_started or 0)
+                    self._scan_ended = time.time()
                     self._update_buttons()
-                    if self.results:
-                        self.status_var.set(
-                            f"Found {len(self.results):,} deleted items. "
-                            "Search by name, then select and recover.")
-                    else:
-                        self.status_var.set("Scan finished - nothing found.")
+                    self._say_when_the_last_scan_was()
         except queue.Empty:
             pass
+        if not self.scanning and self._scan_ended:
+            self._say_when_the_last_scan_was()
         self.root.after(120, self._drain)
+
+    def _say_when_the_last_scan_was(self):
+        """
+        The line under the scan button, once there is something to say.
+
+        Someone who has been staring at a scan for twenty minutes wants to
+        know it finished and how long it took, not to be told "Ready." as if
+        nothing had happened.
+        """
+        ago = max(0, int(time.time() - self._scan_ended))
+        if ago < 60:
+            when = "just now" if ago < 10 else f"{ago}s ago"
+        elif ago < 3600:
+            when = f"{ago // 60} min ago"
+        else:
+            when = f"{ago // 3600}h ago"
+        took = (f"{self._scan_took:.1f} s" if self._scan_took < 60
+                else f"{self._scan_took / 60:.0f} min")
+        self.status_var.set(f"last scan {when}  \u00b7  {took}")
 
     def _on_close(self):
         self.stop_flag.set()
