@@ -371,6 +371,10 @@ class DropdownLabelTests(unittest.TestCase):
         self.assertIn("TESTCARD", label)
 
     def test_an_informative_mount_point_is_kept(self):
-        label = diskio._describe("Data", "/System/Volumes/Data", None, False,
-                                 "APFS", "/dev/rdisk1s1")
+        """
+        "OSX - Data" mounted at /System/Volumes/Data is the real case on this
+        machine: the path says something the name does not, so it stays.
+        """
+        label = diskio._describe("OSX - Data", "/System/Volumes/Data", None,
+                                 False, "APFS", "/dev/rdisk1s1")
         self.assertIn("/System/Volumes/Data", label)
