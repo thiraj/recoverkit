@@ -15,6 +15,7 @@ onto itself.
 """
 
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -455,3 +456,28 @@ class LabelShapeTests(unittest.TestCase):
         self.assertIn("CANON", label)
         self.assertIn("exFAT", label)
         self.assertIn("removable", label)
+
+
+class WindowsSourceParsingTests(unittest.TestCase):
+    """
+    The Windows branch reads a drive letter out of the source. Taking the
+    last letter of whatever it was handed read `/dev/sda` as drive A and then
+    compared it confidently against the destination - a definite answer to a
+    question it could not answer. CI on Windows is what found it.
+    """
+
+    def parse(self, source):
+        """What the guard makes of a source path, without needing Windows."""
+        return re.match(r"^(?:\\\\[.?]\\)?([A-Za-z]):", source.strip())
+
+    def test_real_drive_specifications_are_read(self):
+        for source, letter in ((r"\\.\C:", "C"), ("C:", "C"),
+                               (r"\\?\D:", "D"), ("e:\\", "e")):
+            match = self.parse(source)
+            self.assertIsNotNone(match, source)
+            self.assertEqual(match.group(1), letter)
+
+    def test_anything_else_is_not_a_drive(self):
+        for source in ("/dev/sda", "/dev/rdisk4s1", r"\\.\PhysicalDrive1",
+                       "", "some-file.img", r"\\server\share"):
+            self.assertIsNone(self.parse(source), source)

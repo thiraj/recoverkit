@@ -148,6 +148,11 @@ class ScanTests(ImageTestCase):
         self.driver.send(op="scan", device=self.image_path).finish()
         self.assertTrue(self.driver.of("error"))
         self.assertTrue(self.driver.of("done"))
+        # Windows will not delete a file that is still open, and this test
+        # swapped the image out from under a service that had the first one
+        # held. Closing here rather than leaving it to cleanup, which runs in
+        # the wrong order for a second image.
+        self.driver.service.close()
 
     def test_two_scans_at_once_are_refused(self):
         self.driver.send(op="scan", device=self.image_path)

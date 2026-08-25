@@ -150,6 +150,7 @@ class NoGuiImportsTests(unittest.TestCase):
             "array", "fcntl",            # asking a raw device its size
             "threading",                 # one lock, for platforms with no pread
             "json",                      # the service's line protocol
+            "posixpath",                 # mount tables are POSIX everywhere
         }
         # Modules of this project are not dependencies.
         allowed |= {name[:-3] for name in os.listdir(root)

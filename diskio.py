@@ -16,6 +16,7 @@ a raw volume handle. Callers can ask for any offset and length they like.
 """
 
 import os
+import posixpath
 import re
 import sys
 import threading
@@ -270,11 +271,15 @@ def physical_store_map(plist):
 def _resolve_synthesized(disk):
     """Follow a synthesized disk down to the hardware it really lives on."""
     global _physical_store_cache
-    if sys.platform != "darwin" or disk is None:
+    if disk is None:
         return disk
     if _physical_store_cache is None:
-        _physical_store_cache = physical_store_map(
-            _diskutil_plist(["list", "-plist"])) or {}
+        # Only *building* the map needs macOS - diskutil is where it comes
+        # from. Following a map that already exists is arithmetic, and
+        # keeping it platform-locked made the guard untestable anywhere else.
+        _physical_store_cache = (
+            physical_store_map(_diskutil_plist(["list", "-plist"])) or {}
+            if sys.platform == "darwin" else {})
     seen = set()
     while disk in _physical_store_cache and disk not in seen:
         seen.add(disk)
@@ -899,7 +904,11 @@ def device_backing_path(path, mounts):
     """
     if not mounts:
         return None
-    path = os.path.abspath(path)
+    # Normalised as a POSIX path, not with the local platform's rules: a
+    # mount table is POSIX by definition, and os.path.abspath on Windows
+    # turns "/Volumes/Untitled" into "C:\\Volumes\\Untitled", which then
+    # matches nothing in it.
+    path = posixpath.normpath(path.replace("\\", "/")) if path else "/"
     best = None
     for point, device in mounts:
         if path == point or path.startswith(point.rstrip("/") + "/"):
@@ -919,11 +928,15 @@ def same_physical_drive(source_path, dest_folder):
     dest = os.path.abspath(dest_folder)
 
     if sys.platform == "win32":
-        src_letter = source_path.rstrip("\\/").rstrip(":")[-1:].upper()
+        # Only a real drive specification counts - `C:` or `\\.\C:`. Taking
+        # the last letter of whatever was passed reads `/dev/sda` as drive S
+        # and cheerfully compares it against the destination, which is a
+        # confident answer to a question we cannot actually answer.
+        match = re.match(r"^(?:\\\\[.?]\\)?([A-Za-z]):", source_path.strip())
         dst_letter = dest[:1].upper()
-        if not src_letter.isalpha() or not dst_letter.isalpha():
+        if not match or not dst_letter.isalpha():
             return True                  # can't tell - assume the worst
-        return src_letter == dst_letter
+        return match.group(1).upper() == dst_letter
 
     # Scanning a disk image file rather than a device. Writing to the
     # filesystem that holds the image does not overwrite the image's own
