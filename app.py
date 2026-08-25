@@ -19,6 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 import carve
 import diskio
 import signatures
+import verify
 from exfat import ExfatVolume
 from ntfs import NtfsVolume
 
@@ -577,6 +578,7 @@ class App:
 
         ok = fail = 0
         skipped = []
+        written = []
         for f in picks:
             try:
                 if getattr(f, "data", None) is not None:
@@ -601,18 +603,73 @@ class App:
                 target = self._unique(target)
                 with open(target, "wb") as out:
                     out.write(data)
+                written.append(target)
                 ok += 1
             except Exception:
                 fail += 1
+
+        reports = self._verify_recovered(written)
 
         msg = f"Recovered {ok} file(s) to:\n{dest}"
         if fail:
             msg += f"\n\n{fail} could not be read (data overwritten)."
         if skipped:
             msg += f"\n\n{len(skipped)} had no recoverable content left."
-        msg += ("\n\nOpen them to check - recovery can't guarantee a file "
-                "is intact.")
+        if reports:
+            msg += "\n\n" + verify.summarise([r for _, r in reports])
+        else:
+            msg += ("\n\nOpen them to check - recovery can't guarantee a "
+                    "file is intact.")
         messagebox.showinfo("Done", msg)
+        self._offer_trim(reports)
+
+    @staticmethod
+    def _verify_recovered(written):
+        """
+        Look inside each recovered file and see whether it is actually whole.
+
+        The score that got it this far only ever saw the file's first bytes.
+        That is no help with a video whose header is perfect and whose index
+        went missing a hundred megabytes later.
+        """
+        reports = []
+        for path in written:
+            try:
+                if verify.can_check(os.path.splitext(path)[1]):
+                    reports.append((path, verify.inspect_file(path)))
+            except OSError:
+                continue
+        return reports
+
+    def _offer_trim(self, reports):
+        """Trim the ones whose own structure says where they really end."""
+        fixable = [(path, r) for path, r in reports if r.repairable]
+        if not fixable:
+            return
+
+        names = "\n".join(f"    {os.path.basename(p)}" for p, _ in fixable[:8])
+        if len(fixable) > 8:
+            names += f"\n    ...and {len(fixable) - 8} more"
+        if not messagebox.askyesno(
+                "Some files have extra data on the end",
+                f"{len(fixable)} recovered file(s) have leftover data stuck "
+                f"on the end. Each one says internally where it really "
+                f"finishes, so the extra can be cut off exactly:\n\n{names}\n\n"
+                f"Save tidied-up copies alongside them? The files you already "
+                f"have will be left exactly as they are."):
+            return
+
+        done = 0
+        for path, report in fixable:
+            try:
+                if verify.trim_copy(path, report):
+                    done += 1
+            except OSError:
+                pass
+        messagebox.showinfo(
+            "Tidied up",
+            f"Saved {done} tidied copy(ies), each named \"(trimmed)\".\n\n"
+            f"Your original recovered files are untouched.")
 
     @staticmethod
     def _safe_name(name):

@@ -127,7 +127,8 @@ class NoGuiImportsTests(unittest.TestCase):
 
     def test_engines_do_not_import_the_gui(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for module in ("ntfs.py", "exfat.py", "carve.py", "diskio.py"):
+        for module in ("ntfs.py", "exfat.py", "carve.py", "diskio.py",
+                       "signatures.py", "verify.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 source = fh.read()
             for banned in ("import tkinter", "from tkinter", "import app"):
@@ -145,11 +146,13 @@ class NoGuiImportsTests(unittest.TestCase):
             "datetime", "struct", "os", "sys", "re",
             "ctypes", "string",          # Windows volume enumeration
             "subprocess", "plistlib",    # macOS volume enumeration (diskutil)
+            "zlib",                      # PNG chunk checksums in verify.py
         }
         # Modules of this project are not dependencies.
         allowed |= {name[:-3] for name in os.listdir(root)
                     if name.endswith(".py")}
-        for module in ("ntfs.py", "exfat.py", "carve.py", "diskio.py"):
+        for module in ("ntfs.py", "exfat.py", "carve.py", "diskio.py",
+                       "signatures.py", "verify.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 for line in fh:
                     line = line.strip()
@@ -168,7 +171,7 @@ class SourceOpeningTests(unittest.TestCase):
     def test_only_diskio_opens_devices(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         openers = ("os.open(", "open(", "io.open(", "os.fdopen(")
-        for module in ("ntfs.py", "exfat.py", "carve.py"):
+        for module in ("ntfs.py", "exfat.py", "carve.py", "signatures.py"):
             with open(os.path.join(root, module), encoding="utf-8") as fh:
                 for number, line in enumerate(fh, 1):
                     code = line.split("#")[0]

@@ -58,6 +58,13 @@ exfat.py    exFAT directory parser. The second undelete engine, for memory
             bitmap the same way.
 carve.py    Signature scanner. The deep-scan engine: finds files by header/
             footer byte patterns. No filenames. Works on any filesystem.
+verify.py   Structural check on an already-recovered file: walks the whole
+            container rather than just the header, and trims the ones whose
+            own bookkeeping says where they really end. Never touches a
+            source drive; `trim_copy` writes a new file and never modifies
+            the one it was given. Deliberately does NOT attempt to rebuild a
+            missing index (see untrunc for MP4) - it says what is wrong and
+            stops.
 signatures.py
             What each file type looks like at its first bytes, and the
             three-valued verdict (match / mismatch / blank / unknown) both
