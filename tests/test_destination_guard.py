@@ -378,3 +378,80 @@ class DropdownLabelTests(unittest.TestCase):
         label = diskio._describe("OSX - Data", "/System/Volumes/Data", None,
                                  False, "APFS", "/dev/rdisk1s1")
         self.assertIn("/System/Volumes/Data", label)
+
+
+class LinuxListingTests(unittest.TestCase):
+    """
+    Windows and Linux used to return the bare device - "C:", "/dev/sda1" -
+    while macOS got a name, a size and a filesystem. Windows is the platform
+    most people needing this tool are on, so that was exactly backwards.
+
+    The size in /proc/partitions is in 1KB blocks, which is what makes a 32GB
+    card read as 31,205,376 if you forget.
+    """
+
+    PARTITIONS = """major minor  #blocks  name
+
+   8        0  488386584 sda
+   8        1   31205376 sda1
+ 259        0  500107608 nvme0n1
+   7        0      65536 loop0
+"""
+
+    def test_sizes_come_out_in_bytes(self):
+        sizes = dict(diskio.parse_partitions(self.PARTITIONS))
+        self.assertEqual(sizes["sda1"], 31205376 * 1024)
+        self.assertEqual(sizes["nvme0n1"], 500107608 * 1024)
+
+    def test_the_header_rows_are_not_devices(self):
+        names = [name for name, _ in diskio.parse_partitions(self.PARTITIONS)]
+        self.assertNotIn("name", names)
+        self.assertEqual(names, ["sda", "sda1", "nvme0n1", "loop0"])
+
+    def test_junk_does_not_raise(self):
+        for text in ("", "\n", "one\ntwo\nthree", "a b c d e f"):
+            diskio.parse_partitions(text)
+
+
+class LabelShapeTests(unittest.TestCase):
+    """
+    Every platform must produce the same three-part label, because the window
+    splits it to fit the device path on its own line. A platform that returns
+    something shaped differently silently loses that.
+    """
+
+    CASES = [
+        ("System", "C:\\", 500_000_000_000, False, "NTFS", r"\\.\C:"),
+        ("CANON", "E:\\", 31_914_983_424, True, "exFAT", r"\\.\E:"),
+        ("PHOTOS", "/media/pi/PHOTOS", 31_914_983_424, True, "exFAT",
+         "/dev/sda1"),
+        ("TESTCARD", None, 4_026_531_840, True, "exFAT", "/dev/rdisk2s1"),
+    ]
+
+    def test_every_platform_produces_three_parts(self):
+        for name, point, size, removable, filesystem, device in self.CASES:
+            label = diskio._describe(name, point, size, removable, filesystem,
+                                     device)
+            parts = label.split(diskio.PART)
+            self.assertEqual(len(parts), 3, label)
+            self.assertEqual(parts[0], name)
+            self.assertEqual(parts[-1], device)
+
+    def test_the_device_is_not_repeated_in_the_readable_half(self):
+        """
+        The window shows the first two parts in a narrow box and the device
+        underneath. If the device is also in the readable half it is shown
+        twice and the box truncates for nothing.
+        """
+        for name, point, size, removable, filesystem, device in self.CASES:
+            label = diskio._describe(name, point, size, removable, filesystem,
+                                     device)
+            readable = diskio.PART.join(label.split(diskio.PART)[:2])
+            self.assertNotIn(device, readable, label)
+
+    def test_a_windows_drive_says_what_it_is(self):
+        label = diskio._describe("CANON", "E:\\", 31_914_983_424, True,
+                                 "exFAT", r"\\.\E:")
+        self.assertIn("CANON", label)
+        self.assertIn("exFAT", label)
+        self.assertIn("removable", label)

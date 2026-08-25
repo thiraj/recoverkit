@@ -86,14 +86,19 @@ jobs:
       # real volume with the operating system's own tools, write files into
       # it, delete them with a real driver, then scan the image. These tests
       # have never once run - there is no mkntfs on macOS.
+      # No `fuse` here: it was replaced by `fuse3` in Ubuntu 24.04 and asking
+      # for the old name fails the whole job before a test has run. ntfs-3g
+      # pulls in whatever it needs.
       - name: Install the filesystem tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ntfs-3g exfatprogs fuse
+          sudo apt-get install -y ntfs-3g exfatprogs
 
+      # An absolute interpreter path: `python` is not on root's PATH, because
+      # setup-python installs into a user-owned directory.
       - name: NTFS and exFAT, formatted and deleted for real
         env:
           RECOVERKIT_INTEGRATION: "1"
         run: |
-          sudo -E env "PATH=$PATH" python -m unittest \
+          sudo -E "$(which python)" -m unittest \
             tests.test_integration_ntfs tests.test_integration_exfat -v

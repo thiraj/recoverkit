@@ -477,6 +477,176 @@ def _macos_volumes_fallback():
     return out
 
 
+# ---------------------------------------------------------------------------
+# Windows and Linux volume discovery
+#
+# Both used to return the bare device - "C:" or "/dev/sda1" - while macOS got
+# a name, a size and a filesystem. That is backwards: Windows is where NTFS
+# lives and where most people needing this tool are, and "which of these do I
+# pick" is a worse question when every option is a letter.
+# ---------------------------------------------------------------------------
+
+# GetDriveType results worth naming.
+_DRIVE_REMOVABLE = 2
+_DRIVE_FIXED = 3
+_DRIVE_REMOTE = 4
+_DRIVE_CDROM = 5
+
+
+def _windows_volumes():
+    """Drive letters, with the volume name, size and filesystem attached."""
+    try:
+        import ctypes
+        import string
+        from ctypes import wintypes
+    except ImportError:
+        return None
+
+    try:
+        kernel32 = ctypes.windll.kernel32
+        # Stops Windows popping a dialog about an empty card reader while we
+        # are only asking how big it is.
+        kernel32.SetErrorMode(0x0001 | 0x0002)
+
+        kernel32.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetVolumeInformationW.argtypes = [
+            wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR, wintypes.DWORD]
+        kernel32.GetDiskFreeSpaceExW.argtypes = [
+            wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_ulonglong),
+            ctypes.POINTER(ctypes.c_ulonglong),
+            ctypes.POINTER(ctypes.c_ulonglong)]
+        mask = kernel32.GetLogicalDrives()
+    except Exception:
+        return None
+
+    out = []
+    for index, letter in enumerate(string.ascii_uppercase):
+        if not mask >> index & 1:
+            continue
+        root = f"{letter}:\\"
+        device = rf"\\.\{letter}:"
+        try:
+            kind = kernel32.GetDriveTypeW(root)
+            if kind in (_DRIVE_REMOTE, _DRIVE_CDROM):
+                continue                    # a network share is not a disk
+
+            name = ctypes.create_unicode_buffer(261)
+            filesystem = ctypes.create_unicode_buffer(261)
+            serial = wintypes.DWORD()
+            longest = wintypes.DWORD()
+            flags = wintypes.DWORD()
+            kernel32.GetVolumeInformationW(
+                root, name, 261, ctypes.byref(serial), ctypes.byref(longest),
+                ctypes.byref(flags), filesystem, 261)
+
+            total = ctypes.c_ulonglong(0)
+            kernel32.GetDiskFreeSpaceExW(root, None, ctypes.byref(total), None)
+
+            removable = kind == _DRIVE_REMOVABLE
+            out.append((
+                not removable, (name.value or "").lower(),
+                _describe(name.value or f"{letter}:", root, total.value,
+                          removable, filesystem.value, device),
+                device))
+        except Exception:
+            # One awkward drive must not cost the user the whole list.
+            out.append((True, letter, f"{letter}:{PART}{device}", device))
+
+    out.sort()
+    return [(label, path) for _, _, label, path in out] or None
+
+
+def parse_partitions(text):
+    """
+    [(device name, size in bytes), ...] from /proc/partitions.
+
+    The third column is the size in 1KB blocks, which is what makes a 4GB
+    stick show up as 3,915,776 rather than anything a person would recognise.
+    """
+    found = []
+    for line in text.splitlines()[2:]:
+        parts = line.split()
+        if len(parts) == 4 and parts[2].isdigit():
+            found.append((parts[3], int(parts[2]) * 1024))
+    return found
+
+
+def _linux_labels():
+    """{device name: volume label} from the by-label symlinks."""
+    labels = {}
+    folder = "/dev/disk/by-label"
+    try:
+        for name in os.listdir(folder):
+            try:
+                target = os.path.realpath(os.path.join(folder, name))
+                labels[os.path.basename(target)] = name.replace("\\x20", " ")
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return labels
+
+
+def _linux_removable(name):
+    """Does this partition live on a drive that can be unplugged?"""
+    disk = _whole_disk(name)
+    try:
+        with open(f"/sys/block/{disk}/removable") as fh:
+            return fh.read().strip() == "1"
+    except OSError:
+        return False
+
+
+def _linux_volumes():
+    try:
+        with open("/proc/partitions") as fh:
+            partitions = parse_partitions(fh.read())
+    except OSError:
+        return None
+    if not partitions:
+        return None
+
+    text = _read_mount_text() or ""
+    mounted = {device: point for point, device in parse_mount_table(text)}
+    filesystems = parse_mount_filesystems(text)
+    labels = _linux_labels()
+    try:
+        whole = set(os.listdir("/sys/block"))
+    except OSError:
+        whole = set()
+
+    volumes, disks, on_disk = [], [], {}
+    for name, size in partitions:
+        # Loop and ram devices are noise unless something is mounted from
+        # them - a build machine can have dozens.
+        if name.startswith(("loop", "ram")) and name not in mounted:
+            continue
+        device = f"/dev/{name}"
+        removable = _linux_removable(name)
+        label = labels.get(name)
+        point = mounted.get(name)
+        filesystem = filesystems.get(point) if point else None
+
+        if name in whole:
+            disks.append((not removable, name, size, removable, device))
+        else:
+            if label:
+                on_disk.setdefault(_whole_disk(name), []).append(label)
+            volumes.append((not removable, (label or name).lower(),
+                            _describe(label or name, point, size, removable,
+                                      filesystem, device), device))
+
+    volumes.sort()
+    disks.sort()
+    out = [(text_, path) for _, _, text_, path in volumes]
+    for _, name, size, removable, device in disks:
+        out.append((_describe_whole_disk(on_disk.get(name, []), size,
+                                         removable, device), device))
+    return out or None
+
+
 def list_volumes():
     """
     Return [(display_name, device_path), ...] for volumes we might scan.
@@ -485,28 +655,41 @@ def list_volumes():
     out = []
 
     if sys.platform == "win32":
-        import ctypes
-        import string
-        mask = ctypes.windll.kernel32.GetLogicalDrives()
-        for i, letter in enumerate(string.ascii_uppercase):
-            if mask >> i & 1:
-                out.append((f"{letter}:", rf"\\.\{letter}:"))
+        out = _windows_volumes() or _windows_volumes_fallback()
 
     elif sys.platform == "darwin":
         # /dev/rdiskN is the raw (unbuffered) character device - much faster.
         out = _macos_volumes() or _macos_volumes_fallback()
 
     else:  # Linux
-        try:
-            with open("/proc/partitions") as fh:
-                for line in fh.readlines()[2:]:
-                    parts = line.split()
-                    if len(parts) == 4:
-                        dev = parts[3]
-                        out.append((f"/dev/{dev}", f"/dev/{dev}"))
-        except OSError:
-            pass
+        out = _linux_volumes() or _linux_volumes_fallback()
 
+    return out
+
+
+def _windows_volumes_fallback():
+    """Bare drive letters, for when Windows will not answer properly."""
+    try:
+        import ctypes
+        import string
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+    except Exception:
+        return []
+    return [(f"{letter}:{PART}{letter}:\\", rf"\\.\{letter}:")
+            for i, letter in enumerate(string.ascii_uppercase) if mask >> i & 1]
+
+
+def _linux_volumes_fallback():
+    """Bare device nodes, for when /proc and /sys are not readable."""
+    out = []
+    try:
+        with open("/proc/partitions") as fh:
+            for name, size in parse_partitions(fh.read()):
+                device = f"/dev/{name}"
+                out.append((f"{name}{PART}{human_size(size)}{PART}{device}",
+                            device))
+    except OSError:
+        pass
     return out
 
 

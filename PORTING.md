@@ -169,14 +169,13 @@ Windows is the priority audience and currently gets the worse experience:
     macOS      TESTCARD — 3.7 GB exFAT, removable — /dev/rdisk2s1
     Windows    C:
 
-`diskio.list_volumes` builds rich, plain-language labels on macOS and returns
-bare drive letters on Windows. No volume name, no size, no filesystem, no
-indication of which drive is removable. Everything the "which drive do I
-pick" problem needed solving, solved on the platform that needs it least.
+**Fixed.** All three platforms now build the same three-part label - name,
+facts, device - so the window can show the readable half in its narrow box
+and the device path underneath. Windows reads the volume name, size,
+filesystem and removability through `GetVolumeInformationW`,
+`GetDiskFreeSpaceExW` and `GetDriveTypeW`; Linux reads `/proc/partitions`,
+`/proc/mounts`, `/sys/block` and the by-label symlinks. Each falls back to
+the bare device if the platform will not answer.
 
-None of the Windows code paths have ever been run. The suite skips 13 tests
-outside Windows.
-
-**The cheapest fix for that is CI.** GitHub Actions runs Windows, macOS and
-Linux for free on a public repository. Without it, "Windows first" means
-shipping code nobody has executed.
+The Windows code still has never been run on Windows by anyone here - that is
+what CI is for, and it is now wired up.
