@@ -30,7 +30,13 @@ def noise(length, seed=0):
     byte here is in 0x01-0x7E, which no signature in carve.SIGNATURES uses.
     """
     generator = random.Random(seed)
-    return bytes(generator.randrange(0x01, 0x7F) for _ in range(length))
+    # Built as one block and tiled rather than a byte at a time: the carver
+    # tests need multi-megabyte images, and a Python-level loop over eight
+    # million bytes dominated the whole suite's runtime.
+    block = bytes(generator.randrange(0x01, 0x7F) for _ in range(1 << 16))
+    if length <= len(block):
+        return block[:length]
+    return (block * (length // len(block) + 1))[:length]
 
 
 def md5(data):

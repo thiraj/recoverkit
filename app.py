@@ -419,6 +419,9 @@ class App:
 
     def _worker(self, source):
         try:
+            if self.disk is not None:
+                self.disk.close()
+                self.disk = None
             disk = diskio.ReadOnlyDisk(source)
             self.disk = disk
 
@@ -547,20 +550,6 @@ class App:
         picks = [self.visible[int(i)] for i in self.tree.selection()]
         if not picks:
             return
-        # Files carrying their own data can be saved at any time. Files that
-        # would need another read of the drive cannot, while the scanning
-        # thread is using that same handle - two threads seeking the same
-        # descriptor would hand back each other's bytes.
-        if self.scanning and any(getattr(f, "data", None) is None
-                                 for f in picks):
-            messagebox.showinfo(
-                "Still scanning",
-                "These files still have to be read from the drive, and the "
-                "scan is using it right now.\n\n"
-                "Wait for the scan to finish, or press Stop, then recover "
-                "them.")
-            return
-
         dest = self._guard_destination(self._source_path())
         if not dest:
             return
@@ -587,10 +576,10 @@ class App:
         written = []
         for f in picks:
             try:
-                if getattr(f, "data", None) is not None:
-                    data = f.data                      # carved: already in hand
-                elif self.volume:
+                if self.volume:
                     data = self.volume.read_file(f)
+                elif self.disk is not None and hasattr(f, "offset"):
+                    data = carve.read_file(self.disk, f)   # deep-scan result
                 else:
                     skipped.append(f.name)
                     continue

@@ -44,8 +44,31 @@ if HAVE_WORKING_TK:
     import signatures
 
 
+class NoDialogs:
+    """
+    Stops any test opening a real modal dialog.
+
+    Learned the hard way: one test fell through into a code path that calls
+    messagebox.showerror, and the suite went from nine seconds to five and a
+    half minutes waiting for a dialog nobody could see, let alone dismiss.
+    Recording what would have been shown is more useful for assertions
+    anyway.
+    """
+
+    def silence_dialogs(self):
+        self.dialogs = []
+        for name, answer in (("showinfo", None), ("showerror", None),
+                             ("showwarning", None), ("askyesno", False),
+                             ("askokcancel", False)):
+            original = getattr(appmod.messagebox, name)
+            self.addCleanup(setattr, appmod.messagebox, name, original)
+            setattr(appmod.messagebox, name,
+                    (lambda title, text, _n=name, _a=answer, **kw:
+                     (self.dialogs.append((_n, title, text)), _a)[1]))
+
+
 @unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
-class RecoverButtonTests(unittest.TestCase):
+class RecoverButtonTests(NoDialogs, unittest.TestCase):
     """
     The button was gated on `not self.scanning`, which is wrong for deep scan:
     that mode streams results in while it runs, so the list filled up while
@@ -53,6 +76,7 @@ class RecoverButtonTests(unittest.TestCase):
     """
 
     def setUp(self):
+        self.silence_dialogs()
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
@@ -65,8 +89,8 @@ class RecoverButtonTests(unittest.TestCase):
                                 content_check=signatures.MATCH)
 
     def carved(self, name="recovered_jpg_00001.jpg"):
-        """A deep-scan result: its bytes are already in memory."""
-        return carve.CarvedFile(name, "jpg", 4096, 900, b"x" * 900)
+        """A deep-scan result: records where the file is, not what it holds."""
+        return carve.CarvedFile(name, "jpg", 4096, 900)
 
     def show(self, files, scanning=False):
         self.app.scanning = scanning
@@ -93,8 +117,9 @@ class RecoverButtonTests(unittest.TestCase):
 
     def test_deep_scan_results_can_be_recovered_while_the_scan_runs(self):
         """
-        The regression. Carved files carry their own bytes, so there is no
-        reason to make someone wait out a long scan before saving one.
+        The regression. Results stream in during a deep scan, so gating the
+        button on the scan being finished left the list full and the button
+        dead for the whole run.
         """
         self.show([self.carved()], scanning=True)
         self.select_first()
@@ -111,44 +136,22 @@ class RecoverButtonTests(unittest.TestCase):
         self.assertEqual(self.state(), "normal")
 
 
-@unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
-class ConcurrentReadRefusalTests(unittest.TestCase):
-    """
-    Enabling the button is only half of it. A file that still has to be read
-    off the drive cannot be recovered while the scanning thread is using that
-    same descriptor - both would seek it out from under each other and the
-    saved file would be quietly wrong.
-    """
+if __name__ == "__main__":
+    unittest.main()
 
+
+@unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
+class DialogSafetyTests(NoDialogs, unittest.TestCase):
     def setUp(self):
+        self.silence_dialogs()
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
         self.app = appmod.App(self.root)
-        self.messages = []
-        self.original = appmod.messagebox.showinfo
-        appmod.messagebox.showinfo = lambda title, text: self.messages.append(
-            (title, text))
-        self.addCleanup(setattr, appmod.messagebox, "showinfo", self.original)
 
-    def test_a_mid_scan_recovery_that_needs_the_drive_is_refused(self):
-        self.app.scanning = True
-        self.app.events.put(("batch", [
-            ntfs.DeletedFile(name="photo.jpg", path="", size=10, chance=100,
-                             runs=[(1, 1)], is_dir=False,
-                             content_check=signatures.MATCH)]))
-        self.app._drain()
-        self.app.tree.selection_set(self.app.tree.get_children()[0])
-
-        self.app._recover()
-
-        self.assertTrue(self.messages, "the user was told nothing")
-        title, text = self.messages[0]
-        self.assertIn("scanning", title.lower())
-        self.assertIn("Stop", text)
-        for jargon in ("descriptor", "thread", "lseek", "race"):
-            self.assertNotIn(jargon, text.lower())
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_a_scan_with_no_drive_chosen_complains_instead_of_hanging(self):
+        self.app.drive_var.set("")
+        self.app._start()
+        self.assertTrue(self.dialogs, "no dialog was raised")
+        self.assertEqual(self.dialogs[0][0], "showerror")
+        self.assertFalse(self.app.scanning)

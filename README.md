@@ -187,7 +187,9 @@ with diskio.ReadOnlyDisk("/dev/rdisk2") as disk:
   at 50%. Photos and videos straight off a camera are almost always in one
   piece; files edited in place on the card often are not.
 - Very large drives take a long time to deep scan; undelete is much faster
-  because it only reads the file table.
+  because it only reads the file table. Deep scan reads the drive roughly
+  once — it does not hold what it finds in memory, so scanning a full card
+  costs the same memory as scanning an empty one.
 - Carved files with no end-marker (ZIP, DOCX, MP4) come out with harmless
   trailing junk.
 - Compressed and encrypted NTFS files are not decoded.

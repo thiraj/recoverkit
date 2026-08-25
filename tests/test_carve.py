@@ -40,17 +40,22 @@ class CarveTests(ImageTestCase):
         self.use_image(self.blob)
 
     def carve(self, types, **kw):
-        return list(carve.scan(self.disk(), types, **kw))
+        self.handle = self.disk()
+        return list(carve.scan(self.handle, types, **kw))
+
+    def content(self, found):
+        """Carved results record where the file is, not what it holds."""
+        return carve.read_file(self.handle, found)
 
     def test_carved_files_are_byte_identical(self):
         found = self.carve(["jpg", "png"])
         by_ext = {f.ext: f for f in found}
 
         self.assertIn("jpg", by_ext)
-        self.assertEqual(md5(by_ext["jpg"].data), md5(self.photo))
+        self.assertEqual(md5(self.content(by_ext["jpg"])), md5(self.photo))
 
         self.assertIn("png", by_ext)
-        self.assertEqual(md5(by_ext["png"].data), md5(self.picture))
+        self.assertEqual(md5(self.content(by_ext["png"])), md5(self.picture))
 
     def test_source_image_is_unchanged_by_a_carve(self):
         self.carve(["jpg", "png", "pdf", "zip"])
@@ -102,9 +107,11 @@ class CarveAcrossChunkBoundaryTests(ImageTestCase):
         self.use_image(bytes(blob))
 
     def test_a_file_straddling_a_chunk_boundary_is_still_found_whole(self):
-        found = list(carve.scan(self.disk(), ["jpg"]))
+        handle = self.disk()
+        found = list(carve.scan(handle, ["jpg"]))
         self.assertEqual(len(found), 1, "the straddling file was missed")
-        self.assertEqual(md5(found[0].data), md5(self.photo))
+        self.assertEqual(md5(carve.read_file(handle, found[0])),
+                         md5(self.photo))
 
 
 class CarveNoiseTests(ImageTestCase):
@@ -152,10 +159,12 @@ class CarveInterleavedReadTests(ImageTestCase):
                          "later files were missed")
 
     def test_and_they_are_byte_identical(self):
-        found = sorted(carve.scan(self.disk(), ["jpg"]),
-                       key=lambda f: f.offset)
-        self.assertEqual(md5(found[0].data), md5(self.first))
-        self.assertEqual(md5(found[1].data), md5(self.second))
+        handle = self.disk()
+        found = sorted(carve.scan(handle, ["jpg"]), key=lambda f: f.offset)
+        self.assertEqual(md5(carve.read_file(handle, found[0])),
+                         md5(self.first))
+        self.assertEqual(md5(carve.read_file(handle, found[1])),
+                         md5(self.second))
 
     def test_reported_offsets_point_at_the_real_data(self):
         for f in carve.scan(self.disk(), ["jpg"]):
@@ -190,3 +199,103 @@ class CarveHonestyTests(ImageTestCase):
         """
         found = {f.ext: f for f in carve.scan(self.disk(), ["jpg", "zip"])}
         self.assertGreater(found["jpg"].chance, found["zip"].chance)
+
+
+class CarveCostTests(ImageTestCase):
+    """
+    Correctness is not the only thing that makes a scanner unusable.
+
+    Deep scan used to ask for each format's *maximum* size the moment it saw a
+    header - thirty megabytes for a JPEG, two gigabytes for a video - before
+    knowing whether the hit was real. A three-byte JPEG header turns up in
+    random data about once per 16MB, so a 4GB card meant several gigabytes of
+    wasted reading over USB before any real work. Measured on a small image it
+    came to 64x the image size.
+    """
+
+    def setUp(self):
+        import random
+        rng = random.Random(99)
+        real = jpeg(b"J" * 5000)
+        blob = bytearray()
+        for _ in range(5):
+            # Real random data, so it contains stray headers like a disk does.
+            blob += bytes(rng.randrange(256) for _ in range(200_000))
+            blob += real
+        blob += bytes(rng.randrange(256) for _ in range(1_000_000))
+        self.real = real
+        self.image_size = len(blob)
+        self.use_image(bytes(blob))
+
+    def test_the_scan_does_not_read_the_drive_many_times_over(self):
+        handle = self.disk()
+        asked = [0]
+        original = handle.read
+        handle.read = lambda o, n: (asked.__setitem__(0, asked[0] + n),
+                                    original(o, n))[1]
+
+        list(carve.scan(handle, ["jpg", "mp4", "pdf", "zip"]))
+
+        ratio = asked[0] / self.image_size
+        self.assertLess(ratio, 4.0,
+                        f"deep scan asked for {ratio:.1f}x the size of the "
+                        f"drive; a false header must not pull its format's "
+                        f"maximum size off the disk")
+
+    def test_results_do_not_carry_the_files_they_found(self):
+        """
+        Holding the bytes meant deep-scanning a full card kept the whole card
+        in memory. Results record where a file is, like the undelete engines
+        record cluster maps.
+        """
+        found = list(carve.scan(self.disk(), ["jpg"]))
+        self.assertTrue(found)
+        for f in found:
+            self.assertFalse(hasattr(f, "data"),
+                             "carved results are holding file contents again")
+
+    def test_the_content_is_still_correct_when_asked_for(self):
+        handle = self.disk()
+        found = list(carve.scan(handle, ["jpg"]))
+        self.assertEqual(md5(carve.read_file(handle, found[0])),
+                         md5(self.real))
+
+
+class CarveLengthTests(ImageTestCase):
+    """
+    How long is a carved file? Formats differ, and pretending otherwise is
+    how you end up with a 64MB "photo".
+    """
+
+    def setUp(self):
+        import struct
+
+        def box(kind, body):
+            return struct.pack(">I", len(body) + 8) + kind + body
+
+        self.video = (box(b"ftyp", b"isom" + b"\x00" * 8)
+                      + box(b"mdat", b"V" * 40_000)
+                      + box(b"moov", b"\x00" * 128))
+        self.use_image(noise(1000, seed=31) + self.video
+                       + noise(200_000, seed=32))
+
+    def test_a_container_is_measured_by_its_own_box_lengths(self):
+        """
+        An MP4 states its length in its headers, so it can be measured by
+        reading a few bytes per box rather than guessed at.
+        """
+        handle = self.disk()
+        found = list(carve.scan(handle, ["mp4"]))
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].size, len(self.video),
+                         "the video was not measured from its own structure")
+        self.assertEqual(md5(carve.read_file(handle, found[0])),
+                         md5(self.video))
+
+    def test_a_format_that_cannot_be_measured_is_bounded_not_maximised(self):
+        """
+        A zip keeps its index at the very end, so its length cannot be read
+        from the front. It must still not drag in the format's theoretical
+        maximum.
+        """
+        self.assertLessEqual(carve.UNKNOWN_LENGTH_CAP, 128 * 1024 * 1024)

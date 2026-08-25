@@ -19,28 +19,47 @@ SIGNATURES = {
     "png":  (b"\x89PNG\r\n\x1a\n",       b"IEND\xaeB`\x82",      60 * 1024**2),
     "gif":  (b"GIF89a",                  b"\x00\x3B",            20 * 1024**2),
     "bmp":  (b"BM",                      None,                    10 * 1024**2),
-    "heic": (b"\x00\x00\x00\x18ftypheic", None,                   30 * 1024**2),
+    "heic": (b"ftypheic",                None,                    30 * 1024**2),
     "pdf":  (b"%PDF-",                   b"%%EOF",              200 * 1024**2),
     "zip":  (b"PK\x03\x04",              None,                  100 * 1024**2),
     "docx": (b"PK\x03\x04",              None,                  100 * 1024**2),
     "doc":  (b"\xD0\xCF\x11\xE0\xA1\xB1\x1a\xE1", None,          50 * 1024**2),
-    "mp4":  (b"\x00\x00\x00\x18ftyp",    None,                  2000 * 1024**2),
+    "mp4":  (b"ftyp",                    None,                  2000 * 1024**2),
     "mp3":  (b"ID3",                     None,                    50 * 1024**2),
     "sqlite": (b"SQLite format 3\x00",   None,                  200 * 1024**2),
 }
 
 
+# Where a format's marker sits relative to the start of the file. Video
+# containers put `ftyp` after a four-byte box length that varies between
+# encoders, so searching for a fixed 24-byte first box - which is what this
+# used to do - found only the small proportion of files that happened to have
+# one, and silently missed the rest.
+HEADER_OFFSET = {
+    "mp4": 4,
+    "heic": 4,
+}
+
+
 class CarvedFile:
+    """
+    One file found by its signature.
+
+    Records where the file is, not what it contains. Holding the bytes meant a
+    deep scan of a full card kept the whole card in memory - the undelete
+    engines never did this; they keep a cluster map and read on demand, and so
+    does this now. `read_file` fetches the content when it is actually needed.
+    """
+
     __slots__ = ("name", "path", "size", "offset", "ext", "chance",
-                 "deleted_at", "created_at", "is_dir", "data",
+                 "deleted_at", "created_at", "is_dir",
                  "content_check", "still_at")
 
-    def __init__(self, name, ext, offset, size, data):
+    def __init__(self, name, ext, offset, size):
         self.name = name
         self.ext = ext
         self.offset = offset
         self.size = size
-        self.data = data
         self.path = "(no folder - carved)"
         # Carving has no filesystem records to check against, so it cannot
         # know whether a file is whole - only that it starts and ends where a
@@ -63,16 +82,96 @@ class CarvedFile:
         return self.ext
 
 
-def _extract(disk, start, footer, max_size):
-    data = disk.read(start, max_size)
-    if not data:
+PROBE = 1024 * 1024      # how much we look at while hunting for the end
+
+# A format with no end marker cannot tell us where it stops. Rather than
+# swallow its theoretical maximum - two gigabytes, for video - we take a
+# bounded amount and say the length is a guess.
+UNKNOWN_LENGTH_CAP = 64 * 1024 * 1024
+
+BOX_FORMATS = ("mp4", "m4v", "m4a", "mov", "3gp", "heic")
+
+
+def _find_footer(disk, start, footer, max_size):
+    """
+    Length of the file at `start`, found by walking forward to its end marker.
+
+    Reading the format's maximum size up front was the single most expensive
+    thing this scanner did. A three-byte JPEG header turns up in random data
+    roughly once per 16MB, and every one of those false hits pulled 30MB off
+    the drive before being thrown away. Walking forward a megabyte at a time
+    stops at the first end marker instead, which for a false hit is usually
+    within a few tens of kilobytes.
+    """
+    overlap = len(footer) - 1
+    carry = b""
+    pos = 0
+    while pos < max_size:
+        chunk = disk.read(start + pos, min(PROBE, max_size - pos))
+        if not chunk:
+            return None
+        buf = carry + chunk
+        found = buf.find(footer)
+        if found != -1:
+            return pos - len(carry) + found + len(footer)
+        carry = buf[-overlap:] if overlap else b""
+        pos += len(chunk)
+    return None
+
+
+def _declared_length(disk, start, ext, max_size):
+    """
+    Ask a container how long it is, for formats that say so in their headers.
+
+    An MP4 is a chain of boxes, each stating its own length, so the total can
+    be had by reading sixteen bytes per box rather than by guessing. Formats
+    that keep their index at the very end - zip and its descendants - cannot
+    be asked this way.
+    """
+    if ext not in BOX_FORMATS:
         return None
+    pos = 0
+    boxes = 0
+    while pos < max_size and boxes < 1024:
+        head = disk.read(start + pos, 16)
+        if len(head) < 8:
+            break
+        length = int.from_bytes(head[0:4], "big")
+        kind = head[4:8]
+        if not all(32 <= c < 127 for c in kind):
+            break
+        if length == 1:
+            if len(head) < 16:
+                break
+            length = int.from_bytes(head[8:16], "big")
+        if length < 8:
+            break
+        pos += length
+        boxes += 1
+    return pos or None
+
+
+def _measure(disk, start, ext, footer, max_size):
+    """How long is the file at `start`? None means "not a real hit"."""
     if footer:
-        end = data.find(footer)
-        if end == -1:
-            return None          # no end marker nearby - probably a false hit
-        return data[:end + len(footer)]
-    return data
+        return _find_footer(disk, start, footer, max_size)
+
+    declared = _declared_length(disk, start, ext, max_size)
+    if declared:
+        return min(declared, max_size)
+
+    # Nothing states the length. Take a bounded slice rather than the
+    # format's theoretical maximum, and let the trailing junk be trimmed
+    # afterwards by verify.py.
+    tail = disk.read(start, 1)
+    if not tail:
+        return None
+    return min(max_size, UNKNOWN_LENGTH_CAP)
+
+
+def read_file(disk, found):
+    """Fetch a carved file's bytes. Read-only, like everything else here."""
+    return disk.read(found.offset, found.size)
 
 
 def scan(disk, types, progress=None, should_stop=None, limit_bytes=None):
@@ -102,13 +201,16 @@ def scan(disk, types, progress=None, should_stop=None, limit_bytes=None):
                 idx = buf.find(header, pos)
                 if idx == -1:
                     break
-                start = base + idx
-                data = _extract(disk, start, footer, max_size)
-                if data and len(data) > 512:
+                start = base + idx - HEADER_OFFSET.get(ext, 0)
+                if start < 0:
+                    pos = idx + 1
+                    continue
+                size = _measure(disk, start, ext, footer, max_size)
+                if size and size > 512:
                     counters[ext] += 1
                     yield CarvedFile(
                         f"recovered_{ext}_{counters[ext]:05d}.{ext}",
-                        ext, start, len(data), data)
+                        ext, start, size)
                 pos = idx + 1
 
         carry = buf[-max_sig:] if len(buf) >= max_sig else buf

@@ -18,6 +18,7 @@ a raw volume handle. Callers can ask for any offset and length they like.
 import os
 import re
 import sys
+import threading
 
 
 class ReadOnlyDisk:
@@ -27,6 +28,9 @@ class ReadOnlyDisk:
         self.path = path
         self.sector_size = sector_size
         self._size = None
+        # Only needed where os.pread is missing (Windows). pread is atomic and
+        # needs no lock; a seek-then-read pair does.
+        self._lock = threading.Lock()
 
         flags = os.O_RDONLY
         if hasattr(os, "O_BINARY"):          # Windows
@@ -123,8 +127,9 @@ class ReadOnlyDisk:
                 return os.pread(self._fd, size, offset)
             except OSError:
                 return b""
-        os.lseek(self._fd, offset, os.SEEK_SET)
-        return os.read(self._fd, size)
+        with self._lock:
+            os.lseek(self._fd, offset, os.SEEK_SET)
+            return os.read(self._fd, size)
 
     def read(self, offset, length):
         """Read `length` bytes from absolute `offset`. Handles alignment."""

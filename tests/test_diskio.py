@@ -193,3 +193,53 @@ class DeviceSizeTests(ImageTestCase):
         """
         with self.open_disk() as disk:
             self.assertEqual(disk._ioctl_size(), 0)
+
+
+class ConcurrentReadTests(ImageTestCase):
+    """
+    Two things read the drive at once: the deep scan walking it end to end,
+    and a recovery pulling out a file the scan already found. Reads are
+    positional so those cannot disturb each other - which is what makes it
+    safe to recover a result while the scan is still running.
+    """
+
+    def setUp(self):
+        self.pattern = bytes(range(256)) * 512      # 128 KB, position-revealing
+        self.use_image(self.pattern)
+
+    def test_interleaved_reads_do_not_corrupt_each_other(self):
+        import threading
+
+        with self.open_disk() as disk:
+            wrong = []
+
+            def hammer(offset, length, rounds=200):
+                expected = self.pattern[offset:offset + length]
+                for _ in range(rounds):
+                    if disk.read(offset, length) != expected:
+                        wrong.append(offset)
+                        return
+
+            threads = [threading.Thread(target=hammer, args=(o, 300))
+                       for o in (0, 1000, 5000, 60_000, 120_000)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            self.assertEqual(wrong, [],
+                             "concurrent reads returned each other's bytes")
+
+    def test_a_sequential_walk_survives_reads_taken_between_chunks(self):
+        """
+        Exactly what the carver does: stream the drive, and read from it in
+        the middle of streaming. This was the bug that made deep scan return
+        files built from the wrong offsets.
+        """
+        with self.open_disk() as disk:
+            collected = b""
+            for offset, chunk in disk.stream(8192):
+                collected += chunk
+                disk.read(70_000, 512)          # a random read mid-walk
+            self.assertEqual(collected, self.pattern,
+                             "reading mid-walk knocked the walk off course")

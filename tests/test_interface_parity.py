@@ -69,7 +69,7 @@ class ResultInterfaceTests(unittest.TestCase):
         results = [
             ntfs.DeletedFile(name="a.txt", size=1, runs=[], chance=100),
             exfat.DeletedFile(name="a.txt", size=1, runs=[], chance=100),
-            carve.CarvedFile("recovered_jpg_00001.jpg", "jpg", 0, 1, b"x"),
+            carve.CarvedFile("recovered_jpg_00001.jpg", "jpg", 0, 1),
         ]
         for result in results:
             for field in self.GUI_FIELDS:
@@ -148,6 +148,7 @@ class NoGuiImportsTests(unittest.TestCase):
             "subprocess", "plistlib",    # macOS volume enumeration (diskutil)
             "zlib",                      # PNG chunk checksums in verify.py
             "array", "fcntl",            # asking a raw device its size
+            "threading",                 # one lock, for platforms with no pread
         }
         # Modules of this project are not dependencies.
         allowed |= {name[:-3] for name in os.listdir(root)

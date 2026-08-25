@@ -58,6 +58,11 @@ exfat.py    exFAT directory parser. The second undelete engine, for memory
             bitmap the same way.
 carve.py    Signature scanner. The deep-scan engine: finds files by header/
             footer byte patterns. No filenames. Works on any filesystem.
+            Results record where a file is, not what it holds - call
+            `carve.read_file(disk, found)` for the bytes. Never read a
+            format's maximum size to find its end: walk forward to the end
+            marker, or ask a container for its own declared length. Doing
+            otherwise cost 64x the size of the drive in reads.
 verify.py   Structural check on an already-recovered file: walks the whole
             container rather than just the header, and trims the ones whose
             own bookkeeping says where they really end. Never touches a
@@ -129,6 +134,10 @@ if any module other than diskio.py starts opening devices.
   Never imply otherwise in UI text or docs.
 - Compressed and encrypted NTFS files are not decoded.
 - Carved formats without a footer (ZIP, DOCX, MP4) include trailing junk.
+- Deep scan cannot know how long a file is when its format has no end
+  marker and states no length (zip and its descendants). Those are cut at
+  `carve.UNKNOWN_LENGTH_CAP` and carry trailing junk, which `verify.py` can
+  trim afterwards.
 - Carving cannot tell whether a file is whole, and a fragmented file carves
   into nonsense after its first piece however clean the header looked. Carved
   results are therefore never scored above 75, and never at 100. Don't
