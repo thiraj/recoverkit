@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# Local diagnostic output and test volumes - never part of the project
+diag.txt
+*.img
+*.ntfs
+*.exfat
