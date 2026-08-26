@@ -1,0 +1,72 @@
+name: A file was scored or recovered wrongly
+description: A recovery chance that looks wrong, a file that came back damaged, a name or folder that isn't right
+labels: ["scoring"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The score is meant to be honest rather than flattering, so a low score
+        on a file that really is damaged is the tool working. This is for when
+        the score and the reality disagree.
+
+        `diagnose.py` prints the two pieces of evidence the score is built from
+        separately, which is usually enough to say which one is lying:
+
+        ```bash
+        sudo python3 diagnose.py /dev/rdisk2s1 "the-file-name.jpg"
+        ```
+
+        It reads the drive and writes nothing, like everything else here. It
+        works on NTFS and exFAT.
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the tool said, and what actually happened
+      description: The score and condition it showed, and what the recovered file turned out to be like.
+      placeholder: |
+        Scored 100%, condition "looks intact". The recovered JPEG is the right
+        size but opens as grey below the top quarter.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Output of diagnose.py for that file
+      description: Paste the whole thing. Rename the file in the output if the name is private.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: filesystem
+    attributes:
+      label: Filesystem
+      options:
+        - NTFS
+        - exFAT
+        - FAT32
+        - I don't know
+    validations:
+      required: true
+
+  - type: input
+    id: drive
+    attributes:
+      label: What the drive is, and how it's connected
+      placeholder: "1 TB WD external hard drive over USB 3"
+    validations:
+      required: true
+
+  - type: textarea
+    id: history
+    attributes:
+      label: What happened to the file before you scanned
+      description: >
+        Deleted how long ago, and was the drive used afterwards? Space that
+        has been handed out and given back looks different from space that was
+        simply released, and it is the single biggest thing the score depends on.
+      placeholder: "Deleted from the camera about two weeks ago, card used for one more shoot since."
+    validations:
+      required: false

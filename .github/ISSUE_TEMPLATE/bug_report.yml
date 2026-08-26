@@ -1,0 +1,106 @@
+name: Something went wrong
+description: A crash, a drive that isn't listed, a scan that fails or never finishes
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If you are mid-recovery, stop using the affected drive first**, then
+        come back to this. Every file written to it risks overwriting the data
+        you are trying to get back.
+
+        The drive details below are not bureaucracy. The test suite builds
+        volumes in memory, so the one thing it cannot cover is the variety of
+        real hardware — and a USB bridge that misreports its sector size looks
+        exactly like a parser bug until we know it's there.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        Picked the SD card, pressed Start scan, and after about a minute it
+        stopped with "unsupported sector size".
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Anything printed in the terminal
+      description: >
+        The whole traceback if there is one — the last line on its own is
+        rarely enough. Leave blank if nothing was printed.
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and Python version
+      description: "`python3 --version` will tell you the second one."
+      placeholder: "macOS 14.5, Python 3.11.9"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which mode
+      options:
+        - Undelete
+        - Deep scan
+        - It failed before I got that far
+    validations:
+      required: true
+
+  - type: dropdown
+    id: filesystem
+    attributes:
+      label: Filesystem on the drive you scanned
+      options:
+        - NTFS
+        - exFAT
+        - FAT32
+        - APFS
+        - HFS+
+        - ext4
+        - I don't know
+    validations:
+      required: true
+
+  - type: input
+    id: drive
+    attributes:
+      label: What the drive is, and how it's connected
+      description: >
+        Size, what kind of device, and what it's plugged into. SD cards behave
+        differently through a built-in slot than through a USB reader, and a
+        drive inside an external enclosure is reached through a bridge chip
+        that sometimes reports the wrong geometry.
+      placeholder: "64 GB SanDisk SD card, in a USB-C card reader"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How you ran it
+      options:
+        - From source, python app.py
+        - A downloaded release
+    validations:
+      required: true
