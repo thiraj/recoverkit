@@ -29,7 +29,7 @@ file table is damaged.
 Requires Python 3.8 or newer. No third-party packages.
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/thiraj/recoverkit.git
 cd recoverkit
 ```
 
