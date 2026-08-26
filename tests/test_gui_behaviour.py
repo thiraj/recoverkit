@@ -740,6 +740,72 @@ class SidebarTests(NoDialogs, unittest.TestCase):
         self.assertGreaterEqual(long.winfo_height(),
                                 long.TOP * 2 + len(lines) * step)
 
+    def rail_room(self):
+        """(what the rail can show, what it has to show)."""
+        return (self.app._rail_view.winfo_height(),
+                self.app._rail_content.winfo_reqheight())
+
+    def furthest_scroll(self):
+        canvas, content = self.rail_room()
+        return max(content - canvas, 0)
+
+    def test_the_rail_holds_still_when_all_of_it_already_fits(self):
+        """
+        The bug this covers: the rail could be scrolled when there was
+        nothing to scroll to, which left a band of empty rail above the name
+        of the program and the settings pushed off the bottom.
+        """
+        self.root.geometry("1180x1040+40+20")
+        self.root.update()
+        canvas, content = self.rail_room()
+        if canvas <= content:
+            self.skipTest("this screen is too short to show the whole rail")
+        brand = self.app._rail_content.winfo_children()[0]
+        before = brand.winfo_rooty()
+        for _ in range(6):
+            self.app.drive_box.event_generate("<MouseWheel>", delta=-4)
+        self.root.update_idletasks()
+        self.assertEqual(brand.winfo_rooty(), before,
+                         "the rail scrolled with nothing to scroll to")
+        self.assertEqual(self.app._rail_view.yview(), (0.0, 1.0))
+
+    def test_the_scroll_region_is_never_shorter_than_the_rail(self):
+        """
+        A region shorter than the canvas is what lets an old offset survive:
+        Tk has nothing to clamp it against.
+        """
+        self.root.geometry("1180x1040+40+20")
+        self.root.update()
+        canvas, _ = self.rail_room()
+        region = self.app._rail_view.cget("scrollregion").split()
+        self.assertGreaterEqual(int(region[3]), canvas)
+
+    def test_a_scroll_position_that_no_longer_exists_is_pulled_back(self):
+        """
+        The settings change height under the user - the file types come and
+        go with the mode, the mode cards re-wrap when the window is resized -
+        and Tk does not revisit where the view is sitting when they do.
+        """
+        view = self.app._rail_view
+        view.configure(scrollregion=(0, 0, view.winfo_width(), 3000))
+        view.yview_moveto(0.6)
+        self.root.update_idletasks()
+        self.app._settle_rail()
+        self.root.update_idletasks()
+        self.assertLessEqual(view.canvasy(0), self.furthest_scroll(),
+                             "the rail is still scrolled past its settings")
+
+    def test_going_back_from_deep_scan_does_not_leave_it_scrolled_past(self):
+        self.app._choose_mode("carve")
+        self.root.update_idletasks()
+        for _ in range(30):
+            self.app.drive_box.event_generate("<MouseWheel>", delta=-4)
+        self.root.update_idletasks()
+        self.app._choose_mode("undelete")
+        self.root.update_idletasks()
+        self.assertLessEqual(self.app._rail_view.canvasy(0),
+                             self.furthest_scroll())
+
     def test_choosing_a_mode_moves_the_dot(self):
         self.app._choose_mode("carve")
         self.assertTrue(self.app.mode_cards["carve"]._chosen)

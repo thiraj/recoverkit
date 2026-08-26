@@ -1472,11 +1472,15 @@ class App:
         view.configure(yscrollcommand=self._rail_bar.set)
         content = tk.Frame(view, background=SIDEBAR)
         slot = view.create_window(0, 0, window=content, anchor="nw")
-        view.bind("<Configure>",
-                  lambda e: view.itemconfigure(slot, width=e.width))
-        content.bind("<Configure>",
-                     lambda e: view.configure(scrollregion=view.bbox("all")))
         self._rail_view = view
+        self._rail_content = content
+
+        def resized(event):
+            view.itemconfigure(slot, width=event.width)
+            self._settle_rail()
+
+        view.bind("<Configure>", resized)
+        content.bind("<Configure>", self._settle_rail)
 
         pad = GUTTER - 4
         text_width = RAIL_W - pad * 2
@@ -1618,6 +1622,31 @@ class App:
         self._refresh_drives()
         self._toggle_mode()
 
+    def _settle_rail(self, *_):
+        """
+        Keep the rail's scroll position honest about the rail's height.
+
+        The settings change height on their own: the mode cards re-wrap when
+        the window is resized, and the file types appear and disappear with
+        the mode. Tk does not revisit where the view is sitting when that
+        happens, so the rail could be left scrolled to a position that no
+        longer exists - which is seen as a band of empty rail above the name
+        of the program, with nothing below to scroll to.
+
+        Two things stop it. The scroll region is never shorter than the
+        canvas, so "fits" means there is nothing to scroll rather than a
+        short region a stale offset can hang off; and any offset past the end
+        of the settings is pulled back to the end.
+        """
+        view, content = self._rail_view, self._rail_content
+        canvas_height = max(view.winfo_height(), 1)
+        content_height = max(content.winfo_reqheight(), 1)
+        view.configure(scrollregion=(0, 0, view.winfo_width(),
+                                     max(content_height, canvas_height)))
+        furthest = max(content_height - canvas_height, 0)
+        if view.canvasy(0) > furthest:
+            view.yview_moveto(furthest / max(content_height, canvas_height))
+
     def _bind_wheel(self, widget):
         """
         Make the wheel scroll the rail wherever the pointer is inside it.
@@ -1633,6 +1662,9 @@ class App:
             self._bind_wheel(child)
 
     def _wheel_rail(self, event):
+        first, last = self._rail_view.yview()
+        if first <= 0.0 and last >= 1.0:
+            return "break"                   # the whole rail is already shown
         if getattr(event, "num", 0) in (4, 5):
             step = -1 if event.num == 4 else 1
         elif abs(event.delta) >= 120:            # Windows sends multiples
@@ -1778,15 +1810,10 @@ class App:
             self.types_row.grid()
         else:
             self.types_row.grid_remove()
-        # The rail just got shorter or taller. If everything fits again,
-        # scroll back to the top - otherwise the settings sit half off the
-        # top of a rail with empty space below them.
-        view = getattr(self, "_rail_view", None)
-        if view is not None:
-            view.update_idletasks()
-            first, last = view.yview()
-            if last - first >= 1.0:
-                view.yview_moveto(0)
+        # The rail just got shorter or taller.
+        if getattr(self, "_rail_view", None) is not None:
+            self._rail_view.update_idletasks()
+            self._settle_rail()
 
     def _pick_dest(self):
         d = filedialog.askdirectory(title="Choose where to save recovered files")
