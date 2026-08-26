@@ -788,35 +788,60 @@ class Field(tk.Canvas):
     exactly the same height as every button.
 
     Exposes `.entry` so the placeholder and key bindings stay where they were.
+
+    `readonly=True` makes it a display of a value rather than a place to type
+    one. The recovery folder is set by picking a folder that exists, so a
+    typed one is only ever a way to get a path wrong - a typo there sends
+    recovered files somewhere nobody will look, and a path on the source
+    drive is refused later with an error instead of a folder chooser.
     """
 
     HEIGHT = CONTROL_H
     RADIUS = RADIUS
 
     def __init__(self, master, textvariable, font, background=BG, icon=None,
-                 **kw):
+                 readonly=False, command=None, **kw):
         super().__init__(master, height=self.HEIGHT, highlightthickness=0,
                          bd=0, background=background, **kw)
         self._focused = False
         self._icon = icon
+        self._readonly = readonly
+        self.command = command
         self._text_left = FIELD_PAD + (22 if icon else 0)
         self.entry = tk.Entry(self, textvariable=textvariable, font=font,
-                              relief="flat", background=PANEL, foreground=INK,
+                              relief="flat", background=PANEL,
+                              foreground=MUTED if readonly else INK,
                               insertbackground=ACCENT, borderwidth=0,
                               highlightthickness=0,
                               disabledbackground=PANEL,
+                              readonlybackground=PANEL,
                               selectbackground=ACCENT_SOFT,
                               selectforeground=INK)
+        if readonly:
+            # Not "disabled": readonly still shows the value at full
+            # strength and lets it be selected and copied, which is what
+            # someone wants from a path on screen.
+            self.entry.configure(state="readonly", takefocus=0,
+                                 cursor="arrow")
         self._slot = self.create_window(self._text_left, self.HEIGHT // 2,
                                         window=self.entry, anchor="w",
                                         height=self.HEIGHT - 12)
         self.bind("<Configure>", lambda e: self._draw())
         # The canvas is bigger than the entry inside it, so the curved ends
         # are clickable too. Clicking a text field anywhere should put the
-        # cursor in it.
-        self.bind("<Button-1>", lambda e: self.entry.focus_set())
+        # cursor in it - or, for one you cannot type in, do whatever the
+        # field is for.
+        for widget in (self, self.entry):
+            widget.bind("<Button-1>", self._clicked, add="+")
         self.entry.bind("<FocusIn>", self._focus(True), add="+")
         self.entry.bind("<FocusOut>", self._focus(False), add="+")
+
+    def _clicked(self, _event):
+        if self._readonly:
+            if self.command:
+                self.command()
+            return "break"
+        self.entry.focus_set()
 
     def _focus(self, on):
         def handler(_event):
@@ -1491,8 +1516,12 @@ class App:
         section("RECOVER TO", top=0)
         self.dest_var = tk.StringVar(
             value=os.path.join(os.path.expanduser("~"), "Recovered"))
-        place(Field(content, self.dest_var, self.font_mono,
-                    background=SIDEBAR, icon="folder"), bottom=6)
+        # Shown, not typed: the only way to set it is to pick a folder that
+        # exists. Clicking the box opens the chooser, same as the button.
+        self.dest_field = place(
+            Field(content, self.dest_var, self.font_mono, background=SIDEBAR,
+                  icon="folder", readonly=True, command=self._pick_dest),
+            bottom=6)
         place(PillButton(content, "Choose folder\u2026", kind="ghost",
                          font=self.font_small, background=SIDEBAR,
                          command=self._pick_dest), bottom=18)

@@ -66,6 +66,14 @@ class NoDialogs:
                     (lambda title, text, _n=name, _a=answer, **kw:
                      (self.dialogs.append((_n, title, text)), _a)[1]))
 
+    def silence_folder_chooser(self, answer=""):
+        """The folder chooser is modal too, and just as good at hanging."""
+        self.chooser_opened = []
+        original = appmod.filedialog.askdirectory
+        self.addCleanup(setattr, appmod.filedialog, "askdirectory", original)
+        appmod.filedialog.askdirectory = (
+            lambda **kw: (self.chooser_opened.append(kw), answer)[1])
+
 
 @unittest.skipUnless(HAVE_WORKING_TK, "no working Tk on this interpreter")
 class RecoverButtonTests(NoDialogs, unittest.TestCase):
@@ -616,6 +624,62 @@ class ResultTableTests(NoDialogs, unittest.TestCase):
                            ("stuff.zip", "archive"), ("notes.pdf", "doc"),
                            ("noextension", "doc")):
             self.assertEqual(appmod.icon_for(name), kind, name)
+
+
+class RecoveryFolderTests(NoDialogs, unittest.TestCase):
+    """
+    The recovery folder is shown, not typed.
+
+    A typed path is only ever a way to get one wrong, and getting this one
+    wrong is expensive: recovered files land somewhere nobody looks, or on
+    the drive being scanned, where writing them destroys the very data still
+    being recovered. Picking a folder that exists removes the whole class of
+    mistake.
+    """
+
+    def setUp(self):
+        self.silence_dialogs()
+        self.silence_folder_chooser()
+        self.root = tk.Tk()
+        self.addCleanup(self.root.destroy)
+        self.app = appmod.App(self.root)
+        self.root.geometry("1180x720+60+60")
+        self.root.deiconify()
+        self.root.update()
+
+    def test_the_folder_cannot_be_typed_into(self):
+        entry = self.app.dest_field.entry
+        before = self.app.dest_var.get()
+        self.assertEqual(str(entry.cget("state")), "readonly")
+        entry.focus_set()
+        entry.event_generate("<Key>", keysym="x")
+        self.root.update()
+        self.assertEqual(self.app.dest_var.get(), before,
+                         "the recovery folder was edited by typing")
+
+    def test_it_shows_the_folder_that_was_picked(self):
+        self.silence_folder_chooser("/Volumes/Backup/Rescued")
+        self.app._pick_dest()
+        self.root.update()
+        self.assertEqual(self.app.dest_var.get(), "/Volumes/Backup/Rescued")
+        self.assertEqual(self.app.dest_field.entry.get(),
+                         "/Volumes/Backup/Rescued")
+
+    def test_clicking_the_box_opens_the_chooser(self):
+        """A box you cannot type in has to do something when clicked."""
+        self.app.dest_field.event_generate("<Button-1>", x=40, y=18)
+        self.root.update()
+        self.assertTrue(self.chooser_opened, "the folder chooser never opened")
+
+    def test_cancelling_the_chooser_keeps_the_folder_it_had(self):
+        before = self.app.dest_var.get()
+        self.silence_folder_chooser("")          # the user pressed Cancel
+        self.app._pick_dest()
+        self.assertEqual(self.app.dest_var.get(), before)
+
+    def test_the_search_box_is_still_a_place_to_type(self):
+        """The read-only treatment is for one field, not for every field."""
+        self.assertEqual(str(self.app.search_entry.cget("state")), "normal")
 
 
 class DarkChromeTests(NoDialogs, unittest.TestCase):
