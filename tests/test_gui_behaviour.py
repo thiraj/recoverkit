@@ -618,6 +618,74 @@ class ResultTableTests(NoDialogs, unittest.TestCase):
             self.assertEqual(appmod.icon_for(name), kind, name)
 
 
+class DarkChromeTests(NoDialogs, unittest.TestCase):
+    """
+    The parts of the window that are pure appearance, where a mistake is
+    invisible to every other test: a control that kept a light background
+    when the window went dark shows up as a white slab.
+    """
+
+    def setUp(self):
+        self.silence_dialogs()
+        self.root = tk.Tk()
+        self.addCleanup(self.root.destroy)
+        self.app = appmod.App(self.root)
+        self.root.geometry("1180x720+60+60")
+        self.root.deiconify()
+        self.root.update()
+
+    def test_nothing_in_the_window_is_left_on_a_light_background(self):
+        dark = {appmod.BG, appmod.SIDEBAR, appmod.PANEL, appmod.BAND,
+                appmod.STRIP, appmod.ACCENT_SOFT, appmod.ACCENT, ""}
+        wrong = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                try:
+                    background = str(child.cget("background"))
+                except tk.TclError:
+                    background = ""
+                if background and background not in dark:
+                    wrong.append(f"{child.__class__.__name__}: {background}")
+                walk(child)
+
+        seen = []
+
+        def count(widget):
+            for child in widget.winfo_children():
+                seen.append(child)
+                count(child)
+
+        walk(self.root)
+        count(self.root)
+        self.assertGreater(len(seen), 25, "the sweep found almost no widgets")
+        self.assertEqual(wrong, [], "light backgrounds left in a dark window")
+
+    def test_the_admin_warning_puts_the_command_in_its_own_chip(self):
+        """
+        The word someone has to type is the point of that sentence, so it is
+        a chip rather than a word in a paragraph.
+        """
+        if sys.platform == "win32":
+            self.skipTest("the sudo line is for macOS and Linux")
+        # The suite does not run as root, so the bar should be showing.
+        self.assertTrue(self.app.warning.winfo_manager(),
+                        "the admin warning should be visible when not root")
+        self.assertEqual(self.app.warning._chip, "sudo")
+        self.assertIn("admin rights", self.app.warning._before)
+
+    def test_the_table_draws_its_own_frame_rather_than_a_platform_border(self):
+        edge = self.app.tree.find_withtag("edge")
+        self.assertTrue(edge, "the table has no drawn outline")
+        self.assertEqual(self.app.tree.itemcget(edge[0], "dash"), "4 3")
+
+    def test_a_dark_window_uses_a_light_caret_and_selection(self):
+        entry = self.app.search_entry
+        self.assertEqual(str(entry.cget("insertbackground")), appmod.ACCENT)
+        self.assertEqual(str(entry.cget("foreground")),
+                         appmod.FAINT)      # the placeholder is showing
+
+
 class DrawnWidgetTests(unittest.TestCase):
     """
     The window uses drawn replacements for the ttk widgets whose look comes

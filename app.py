@@ -29,35 +29,46 @@ from ntfs import NtfsVolume
 APP_NAME = "RecoverKit"
 VERSION = "1.0"
 
-# Palette. One deep green doing all the work, everything else a grey. A
-# recovery tool is read for hours by someone having a bad day; the colour is
-# there to mark what is safe and what is gone, not to decorate.
-BG = "#ffffff"          # the working surface
-SIDEBAR = "#f7f8f8"     # the settings rail down the left
-PANEL = "#ffffff"
-INK = "#1b2129"         # primary text
-MUTED = "#697585"       # labels and secondary text
-FAINT = "#98a2ae"
-ACCENT = "#14532d"      # the one strong colour
-ACCENT_DEEP = "#0e3b20"  # hover
-ACCENT_SOFT = "#eef6f1"  # selected rows, the read-only badge
-ACCENT_EDGE = "#cde3d5"  # the border that goes with the wash
-GOOD = "#1e8a4c"
-WARN = "#8a5b08"
-BAD = "#a13029"
-LINE = "#e6e9ec"
-STRIPE = "#f6f7f8"      # table heading band and footer strip
-DISABLED = "#c3ccd8"
+# Palette. Dark, indigo, one lavender accent. A recovery tool gets opened at
+# two in the morning by someone who has just lost a card full of photographs;
+# a dark window is kinder at that hour, and the accent marks the two things
+# that matter - what is ticked, and what can still be saved.
+BG = "#232035"          # the working surface
+SIDEBAR = "#1e1b2e"     # the settings rail down the left
+PANEL = "#262238"       # the table body
+BAND = "#2a2540"        # the table's heading band
+STRIP = "#221f34"       # the strip along its bottom
+INK = "#eceaf6"         # primary text
+MUTED = "#a49dc4"       # labels and secondary text
+FAINT = "#7b7499"
+ACCENT = "#8b7ce8"      # ticks, the chosen mode, focus
+ACCENT_DEEP = "#9c8ff0"  # hover
+ACCENT_SOFT = "#2e2947"  # selected rows, the chosen card
+ACCENT_EDGE = "#6c5fa8"  # the border that goes with the wash
+BUTTON = "#413764"      # a filled button
+BUTTON_HOVER = "#4c4174"
+LINE = "#453d68"        # every border in the window
+LINE_SOFT = "#332e4d"   # the rule between two rows
+GOOD = "#9ce0b8"
+WARN = "#e0c48f"
+BAD = "#e8a3a3"
+DISABLED = "#4a4466"
 
-# The chance pill: background, text, dot. A word carries better than a
-# percentage - "Poor" is understood instantly and "38%" is not - but the word
-# is still the score, mapped, never a friendlier version of it.
+# Borders are dashed. It is a quiet way of saying that everything in this
+# window is provisional - a list of things that *might* come back, from a
+# drive that is already damaged - and it keeps a dark interface from looking
+# like a wall of boxes.
+DASH = (4, 3)
+
+# The chance pill: fill, text, border. Lavender like the rest of the window,
+# but a file whose data is gone is not the same news as one that is intact,
+# so the warm and cold ends stay distinguishable.
 PILL_STYLES = {
-    "excellent": ("#e6f4ea", "#14532d", "#1e8a4c"),
-    "good": ("#edf6ef", "#256b40", "#3a9a63"),
-    "fair": ("#fdf3e3", "#8a5b08", "#d99a1a"),
-    "poor": ("#fdeceb", "#a13029", "#d94a41"),
-    "grey": ("#f0f2f4", "#5f6b76", "#9aa5b1"),
+    "excellent": ("#2b2745", "#c9c2ff", "#6f63b8"),
+    "good": ("#2a2642", "#b3aceb", "#5d5498"),
+    "fair": ("#2c2740", "#e0c48f", "#8a7550"),
+    "poor": ("#2e2740", "#e8a3a3", "#8f5f66"),
+    "grey": ("#262238", "#6f6a88", "#443e60"),
 }
 
 # Metrics. Every control in the window is built from these numbers, and that
@@ -173,23 +184,26 @@ class PillButton(tk.Canvas):
 
     # -- appearance ---------------------------------------------------------
     def _colours(self, hover):
+        """(fill, text, border) for the state this button is in."""
         if self._state == "disabled":
             if self.kind == "primary":
-                return DISABLED, "#ffffff", DISABLED
-            return BG, DISABLED, LINE
+                return DISABLED, FAINT, DISABLED
+            return "", DISABLED, LINE_SOFT
         if self.kind == "primary":
-            fill = ACCENT_DEEP if hover else ACCENT
-            return fill, "#ffffff", fill
+            return (BUTTON_HOVER if hover else BUTTON), INK, ACCENT_EDGE
         if self.kind == "danger":
-            return (BG, BAD, BAD)
-        return ((ACCENT_SOFT if hover else BG), INK, LINE)
+            return "", BAD, BAD
+        # Ghost: nothing but a dashed outline until you point at it.
+        return (ACCENT_SOFT if hover else ""), INK, (ACCENT_EDGE if hover
+                                                     else LINE)
 
     def _draw(self, hover=False):
         self.delete("all")
         fill, ink, outline = self._colours(hover)
         width = self.winfo_width() if self.winfo_width() > 1 else self._width
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
-                    fill=fill, outline=outline)
+                    fill=fill or self["background"], outline=outline,
+                    dash=DASH)
         self.create_text(width // 2, self.HEIGHT // 2, text=self._text,
                          fill=ink, font=self._font)
 
@@ -258,10 +272,10 @@ class CheckBox(tk.Canvas):
         self.delete("all")
         on = bool(self.variable.get())
         top = 4
-        fill = ACCENT if on else PANEL
-        edge = ACCENT if on else (ACCENT if hover else LINE)
+        fill = ACCENT if on else self["background"]
+        edge = ACCENT if on else (ACCENT_EDGE if hover else LINE)
         _round_rect(self, 1, top, self.BOX, top + self.BOX - 1, 6,
-                    fill=fill, outline=edge)
+                    fill=fill, outline=edge, dash=() if on else DASH)
         if on:
             x, y = 5, top + 9
             self.create_line(x, y, x + 3, y + 4, x + 9, y - 5,
@@ -293,7 +307,7 @@ class LinkButton(tk.Label):
                          foreground=MUTED, font=font, cursor="arrow", **kw)
         self.command = command
         self.bind("<Button-1>", lambda e: self.command())
-        self.bind("<Enter>", lambda e: self.configure(foreground=ACCENT))
+        self.bind("<Enter>", lambda e: self.configure(foreground=ACCENT_DEEP))
         self.bind("<Leave>", lambda e: self.configure(foreground=MUTED))
 
     def invoke(self):
@@ -326,11 +340,11 @@ class Badge(tk.Canvas):
         height = max(len(lines) * (measure.metrics("linespace") + 2) + 22, 46)
         self.configure(height=height)
         _round_rect(self, 1, 1, width - 1, height - 1, RADIUS,
-                    fill=ACCENT_SOFT, outline=ACCENT_EDGE)
+                    fill=ACCENT_SOFT, outline=ACCENT_EDGE, dash=DASH)
         self._shield(16, height // 2)
         y = (height - len(lines) * (measure.metrics("linespace") + 2)) // 2 + 1
         for line in lines:
-            self.create_text(38, y, text=line, anchor="nw", fill=ACCENT,
+            self.create_text(38, y, text=line, anchor="nw", fill=INK,
                              font=self._font)
             y += measure.metrics("linespace") + 2
 
@@ -351,9 +365,9 @@ class Badge(tk.Canvas):
         """A shield with a tick in it, drawn rather than shipped as a file."""
         self.create_polygon(x, y - 9, x + 7, y - 6, x + 7, y + 1,
                             x, y + 9, x - 7, y + 1, x - 7, y - 6,
-                            fill="", outline=ACCENT, width=1.4, smooth=False)
+                            fill="", outline=ACCENT, width=1.2, smooth=False)
         self.create_line(x - 3, y, x - 1, y + 3, x + 4, y - 4, fill=ACCENT,
-                         width=1.6, capstyle="round", joinstyle="round")
+                         width=1.4, capstyle="round", joinstyle="round")
 
 
 class ModeCard(tk.Canvas):
@@ -393,20 +407,21 @@ class ModeCard(tk.Canvas):
         width = self.winfo_width()
         if width <= 1:
             return
-        edge = ACCENT_EDGE if self._chosen else (ACCENT_EDGE if hover else LINE)
+        edge = ACCENT_EDGE if (self._chosen or hover) else LINE
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, RADIUS,
-                    fill=ACCENT_SOFT if self._chosen else PANEL, outline=edge)
+                    fill=ACCENT_SOFT if self._chosen else self["background"],
+                    outline=edge, dash=DASH)
         self.create_text(FIELD_PAD + 2, 20, text=self._title, anchor="w",
                          fill=INK, font=self._title_font)
         self.create_text(FIELD_PAD + 2, 41, text=self._blurb, anchor="w",
                          fill=MUTED, font=self._blurb_font)
         x, y = width - 22, self.HEIGHT // 2
         if self._chosen:
-            self.create_oval(x - 5, y - 5, x + 5, y + 5, fill=ACCENT,
+            self.create_oval(x - 6, y - 6, x + 6, y + 6, fill=ACCENT,
                              outline=ACCENT)
         else:
-            self.create_oval(x - 6, y - 6, x + 6, y + 6, fill=PANEL,
-                             outline="#c8cfd6")
+            self.create_oval(x - 6, y - 6, x + 6, y + 6, fill="",
+                             outline=LINE, dash=DASH)
 
 
 def file_icon(canvas, kind, x, y, colour=MUTED):
@@ -465,6 +480,84 @@ def icon_for(name):
     return "doc"
 
 
+class DashedRule(tk.Canvas):
+    """A one-pixel dashed line, vertical or horizontal."""
+
+    def __init__(self, master, vertical=True, background=BG, **kw):
+        self.vertical = vertical
+        super().__init__(master, highlightthickness=0, bd=0,
+                         background=background,
+                         width=1 if vertical else 0,
+                         height=0 if vertical else 1, **kw)
+        self.bind("<Configure>", lambda e: self._draw())
+
+    def _draw(self):
+        self.delete("all")
+        if self.vertical:
+            self.create_line(0, 0, 0, self.winfo_height(), fill=LINE,
+                             dash=DASH)
+        else:
+            self.create_line(0, 0, self.winfo_width(), 0, fill=LINE,
+                             dash=DASH)
+
+
+class WarningBar(tk.Canvas):
+    """
+    The one line that has to be read: what is wrong and what to type.
+
+    A command belongs in a box of its own inside the sentence - it is the
+    part someone will copy, and a paragraph of prose with a word of shell
+    buried in it is how people end up typing the wrong thing.
+    """
+
+    HEIGHT = 46
+
+    def __init__(self, master, font, mono, background=BG, **kw):
+        self._font, self._mono = font, mono
+        self._before = self._chip = self._after = ""
+        super().__init__(master, height=self.HEIGHT, highlightthickness=0,
+                         bd=0, background=background, **kw)
+        self.bind("<Configure>", lambda e: self._draw())
+
+    def say(self, before, chip="", after=""):
+        self._before, self._chip, self._after = before, chip, after
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, RADIUS, fill="",
+                    outline=LINE, dash=DASH)
+        middle = self.HEIGHT // 2
+        x = FIELD_PAD + 10
+        self._mark(x, middle)
+        x += 16
+        measure = tkfont.Font(font=self._font)
+        self.create_text(x, middle, text=self._before, anchor="w", fill=MUTED,
+                         font=self._font)
+        x += measure.measure(self._before)
+        if self._chip:
+            chip = tkfont.Font(font=self._mono)
+            span = chip.measure(self._chip) + 16
+            _round_rect(self, x, middle - 11, x + span, middle + 11, 6,
+                        fill=BAND, outline=LINE, dash=DASH)
+            self.create_text(x + span // 2, middle, text=self._chip,
+                             fill=INK, font=self._mono)
+            x += span + 6
+        if self._after:
+            self.create_text(x, middle, text=self._after, anchor="w",
+                             fill=MUTED, font=self._font)
+
+    def _mark(self, x, y):
+        """A warning triangle, drawn."""
+        self.create_polygon(x, y - 7, x + 8, y + 7, x - 8, y + 7, fill="",
+                            outline=WARN, width=1.2)
+        self.create_line(x, y - 2, x, y + 2, fill=WARN, width=1.2)
+        self.create_line(x, y + 4, x, y + 4.6, fill=WARN, width=1.4)
+
+
 class ThinScrollbar(tk.Canvas):
     """
     A scrollbar with no arrow buttons and no trough.
@@ -501,7 +594,7 @@ class ThinScrollbar(tk.Canvas):
         top = self._first * height
         bottom = max(self._last * height, top + 24)
         _round_rect(self, 2, top + 2, self.WIDTH - 2, bottom - 2, 4,
-                    fill=(MUTED if hover else "#c9d1da"), outline="")
+                    fill=(ACCENT if hover else "#6b6389"), outline="")
 
     def _press(self, event):
         height = max(self.winfo_height(), 1)
@@ -572,7 +665,8 @@ class Dropdown(tk.Canvas):
         if width <= 1:
             return
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
-                    fill=PANEL, outline=ACCENT if hover else LINE)
+                    fill=PANEL, outline=ACCENT_EDGE if hover else LINE,
+                    dash=DASH)
         measure = tkfont.Font(font=self._font)
         text = self.variable.get() or "No drives found"
         room = width - 48
@@ -583,6 +677,7 @@ class Dropdown(tk.Canvas):
         self.create_text(FIELD_PAD, self.HEIGHT // 2, text=text, anchor="w",
                          fill=INK if self.variable.get() else FAINT,
                          font=self._font)
+
         x, y = width - 19, self.HEIGHT // 2 - 2
         self.create_line(x - 4, y, x, y + 4, x + 4, y, fill=MUTED,
                          width=1.6, capstyle="round", joinstyle="round")
@@ -593,25 +688,25 @@ class Dropdown(tk.Canvas):
             return
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
-        popup.configure(background=LINE)
+        popup.configure(background=LINE_SOFT)
         # As wide as the box it drops from, so the list reads as the box
         # opening rather than as a separate window landing on top of it.
         popup.geometry(f"{max(self.winfo_width(), 160)}x1"
                        f"+{self.winfo_rootx()}"
                        f"+{self.winfo_rooty() + self.HEIGHT + 4}")
-        inner = tk.Frame(popup, background=PANEL)
+        inner = tk.Frame(popup, background=BAND)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
 
         chosen = self.variable.get()
         for value in self._values:
             row = tk.Label(inner, text=("  " if value != chosen else "\u2713 ")
-                           + value, anchor="w", background=PANEL,
+                           + value, anchor="w", background=BAND,
                            foreground=INK, font=self._font,
                            padx=FIELD_PAD - 4, pady=8)
             row.pack(fill="x")
             row.bind("<Enter>", lambda e, r=row: r.configure(
                 background=ACCENT_SOFT))
-            row.bind("<Leave>", lambda e, r=row: r.configure(background=PANEL))
+            row.bind("<Leave>", lambda e, r=row: r.configure(background=BAND))
             row.bind("<Button-1>", lambda e, v=value: self._choose(v))
 
         popup.update_idletasks()
@@ -707,8 +802,11 @@ class Field(tk.Canvas):
         self._text_left = FIELD_PAD + (22 if icon else 0)
         self.entry = tk.Entry(self, textvariable=textvariable, font=font,
                               relief="flat", background=PANEL, foreground=INK,
-                              insertbackground=INK, borderwidth=0,
-                              highlightthickness=0)
+                              insertbackground=ACCENT, borderwidth=0,
+                              highlightthickness=0,
+                              disabledbackground=PANEL,
+                              selectbackground=ACCENT_SOFT,
+                              selectforeground=INK)
         self._slot = self.create_window(self._text_left, self.HEIGHT // 2,
                                         window=self.entry, anchor="w",
                                         height=self.HEIGHT - 12)
@@ -736,7 +834,7 @@ class Field(tk.Canvas):
         self.delete("box")
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, self.RADIUS,
                     fill=PANEL, outline=ACCENT if self._focused else LINE,
-                    tags="box")
+                    dash=DASH, tags="box")
         if self._icon == "folder":
             self._folder(FIELD_PAD + 7, self.HEIGHT // 2)
         self.tag_lower("box")
@@ -777,7 +875,7 @@ class InfoBox(tk.Canvas):
         if width <= 1:
             return
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, RADIUS,
-                    fill=PANEL, outline=LINE)
+                    fill=PANEL, outline=LINE, dash=DASH)
         meta = self.meta_var.get()
         room = width - FIELD_PAD * 2
         if meta:
@@ -792,7 +890,7 @@ class InfoBox(tk.Canvas):
                          anchor="w", fill=MUTED, font=self._mono)
 
 
-class ResultTable(tk.Frame):
+class ResultTable(tk.Canvas):
     """
     The results, drawn rather than tabulated.
 
@@ -821,8 +919,12 @@ class ResultTable(tk.Frame):
     )
 
     def __init__(self, master, fonts, on_select=None, on_sort=None, **kw):
-        super().__init__(master, background=PANEL, highlightthickness=1,
-                         highlightbackground=LINE, **kw)
+        # The table is itself a canvas, with the heading, the rows, the
+        # scrollbar and the footer strip placed inside it. That is what gets
+        # the outline the rest of the window has - rounded, one pixel,
+        # dashed - around a widget made of four other widgets.
+        super().__init__(master, background=BG, highlightthickness=0, bd=0,
+                         **kw)
         self.fonts = fonts
         self.on_select = on_select
         self.on_sort = on_sort
@@ -832,41 +934,58 @@ class ResultTable(tk.Frame):
         self._sort_key = None
         self._sort_reverse = False
 
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
-
         self.head = tk.Canvas(self, height=HEAD_H, highlightthickness=0, bd=0,
-                              background=STRIPE)
-        self.head.grid(row=0, column=0, columnspan=2, sticky="we")
+                              background=PANEL)
         self.head.bind("<Configure>", lambda e: self._draw_head())
         self.head.bind("<Button-1>", self._head_click)
 
         self.body = tk.Canvas(self, highlightthickness=0, bd=0,
                               background=PANEL)
-        self.body.grid(row=1, column=0, sticky="nsew")
         self.body.bind("<Configure>", lambda e: self.redraw())
         self.body.bind("<Button-1>", self._body_click)
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.body.bind(sequence, self._wheel)
 
         self.bar = ThinScrollbar(self, command=self.yview, background=PANEL)
-        self.bar.grid(row=1, column=1, sticky="ns", padx=(0, 4), pady=4)
 
-        self.foot = tk.Frame(self, background=STRIPE, height=FOOT_H)
-        self.foot.grid(row=2, column=0, columnspan=2, sticky="we")
-        self.foot.grid_propagate(False)
-        self.foot.columnconfigure(0, weight=1)
-        tk.Frame(self.foot, background=LINE, height=1).grid(
-            row=0, column=0, columnspan=2, sticky="we")
+        self.foot = tk.Canvas(self, height=FOOT_H, highlightthickness=0,
+                              bd=0, background=PANEL)
+        self.foot.bind("<Configure>", lambda e: self._draw_foot())
         self.count_var = tk.StringVar()
         self.promise_var = tk.StringVar(
             value="read-only  \u00b7  source drive untouched")
-        tk.Label(self.foot, textvariable=self.count_var, background=STRIPE,
-                 foreground=MUTED, font=fonts["small"]).grid(
-            row=1, column=0, sticky="w", padx=FIELD_PAD + 2)
-        tk.Label(self.foot, textvariable=self.promise_var, background=STRIPE,
-                 foreground=FAINT, font=fonts["small"]).grid(
-            row=1, column=1, sticky="e", padx=FIELD_PAD + 2)
+        for var in (self.count_var, self.promise_var):
+            var.trace_add("write", lambda *_: self._draw_foot())
+
+        self._slots = {
+            name: self.create_window(0, 0, window=widget, anchor="nw")
+            for name, widget in (("head", self.head), ("body", self.body),
+                                 ("bar", self.bar), ("foot", self.foot))}
+        self.bind("<Configure>", lambda e: self._relayout())
+
+    # -- the frame around the four pieces -----------------------------------
+    def _relayout(self):
+        width, height = self.winfo_width(), self.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        self.delete("edge")
+        _round_rect(self, 1, 1, width - 1, height - 1, RADIUS, fill=PANEL,
+                    outline=LINE, dash=DASH, tags="edge")
+        self.tag_lower("edge")
+        inset = 2
+        inner = width - inset * 2
+        body_h = max(height - inset * 2 - HEAD_H - FOOT_H, 1)
+        bar_w = ThinScrollbar.WIDTH + 6
+
+        def put(name, x, y, w, h):
+            self.coords(self._slots[name], x, y)
+            self.itemconfigure(self._slots[name], width=w, height=h)
+
+        put("head", inset, inset, inner, HEAD_H)
+        put("body", inset, inset + HEAD_H, inner - bar_w, body_h)
+        put("bar", width - inset - bar_w + 2, inset + HEAD_H + 4,
+            ThinScrollbar.WIDTH, body_h - 8)
+        put("foot", inset, height - inset - FOOT_H, inner, FOOT_H)
 
     # -- geometry -----------------------------------------------------------
     def _layout(self, width):
@@ -890,7 +1009,13 @@ class ResultTable(tk.Frame):
         width = self.head.winfo_width()
         if width <= 1:
             return
-        self.head.create_line(0, HEAD_H - 1, width, HEAD_H - 1, fill=LINE)
+        # Drawn taller than the canvas so only its top corners are rounded -
+        # they follow the table's own outline, and the bottom edge stays a
+        # straight rule against the first row.
+        _round_rect(self.head, 0, 0, width, HEAD_H * 2, RADIUS, fill=BAND,
+                    outline="")
+        self.head.create_line(0, HEAD_H - 1, width, HEAD_H - 1, fill=LINE,
+                              dash=DASH)
         spans = self._layout(width)
         for key, title, _, align in self.COLUMNS:
             if not title:
@@ -907,6 +1032,21 @@ class ResultTable(tk.Frame):
                 self.head.create_text(x + FIELD_PAD, HEAD_H // 2,
                                       text=title + arrow, anchor="w",
                                       fill=MUTED, font=self.fonts["section"])
+
+    def _draw_foot(self):
+        self.foot.delete("all")
+        width = self.foot.winfo_width()
+        if width <= 1:
+            return
+        _round_rect(self.foot, 0, -FOOT_H, width, FOOT_H, RADIUS, fill=STRIP,
+                    outline="")
+        self.foot.create_line(0, 0, width, 0, fill=LINE_SOFT, dash=DASH)
+        self.foot.create_text(FIELD_PAD + 2, FOOT_H // 2,
+                              text=self.count_var.get(), anchor="w",
+                              fill=MUTED, font=self.fonts["mono_small"])
+        self.foot.create_text(width - FIELD_PAD - 2, FOOT_H // 2,
+                              text=self.promise_var.get(), anchor="e",
+                              fill=FAINT, font=self.fonts["mono_small"])
 
     def _head_click(self, event):
         if not self.on_sort:
@@ -958,14 +1098,16 @@ class ResultTable(tk.Frame):
         if chosen:
             c.create_rectangle(0, y, width, y + ROW_H, fill=ACCENT_SOFT,
                                outline="")
-        c.create_line(0, y + ROW_H - 1, width, y + ROW_H - 1, fill=LINE)
+        c.create_line(0, y + ROW_H - 1, width, y + ROW_H - 1, fill=LINE_SOFT,
+                      dash=DASH)
         middle = y + ROW_H // 2
 
         # the tick box
         x = spans["check"][0] + 17
         _round_rect(c, x - 8, middle - 8, x + 9, middle + 9, 5,
-                    fill=ACCENT if chosen else PANEL,
-                    outline=ACCENT if chosen else "#c8cfd6")
+                    fill=ACCENT if chosen else "",
+                    outline=ACCENT if chosen else LINE,
+                    dash=() if chosen else DASH)
         if chosen:
             c.create_line(x - 4, middle, x - 1, middle + 4, x + 5, middle - 4,
                           fill="#ffffff", width=2, capstyle="round",
@@ -973,40 +1115,38 @@ class ResultTable(tk.Frame):
 
         # name, with the icon for its type
         x, span, _ = spans["name"]
-        file_icon(c, row["icon"], x + FIELD_PAD + 7, middle, FAINT)
-        c.create_text(x + FIELD_PAD + 24, middle,
-                      text=self._fit(row["name"], span - FIELD_PAD - 32,
-                                     self.fonts["body"]),
-                      anchor="w", fill=INK, font=self.fonts["body"])
+        file_icon(c, row["icon"], x + FIELD_PAD + 7, middle, MUTED)
+        c.create_text(x + FIELD_PAD + 26, middle,
+                      text=self._fit(row["name"], span - FIELD_PAD - 34,
+                                     self.fonts["mono"]),
+                      anchor="w", fill=INK, font=self.fonts["mono"])
 
         # the folder it came from, in mono - a path reads as a path
         x, span, _ = spans["folder"]
         c.create_text(x + FIELD_PAD, middle,
                       text=self._fit(row["folder"], span - FIELD_PAD * 2,
                                      self.fonts["mono"]),
-                      anchor="w", fill=MUTED, font=self.fonts["mono"])
+                      anchor="w", fill=FAINT, font=self.fonts["mono"])
 
         x, span, _ = spans["size"]
         c.create_text(x + span - FIELD_PAD, middle, text=row["size"],
-                      anchor="e", fill=INK, font=self.fonts["small"])
+                      anchor="e", fill=MUTED, font=self.fonts["mono"])
 
         x, span, _ = spans["deleted"]
         c.create_text(x + FIELD_PAD, middle, text=row["deleted"], anchor="w",
-                      fill=MUTED, font=self.fonts["small"])
+                      fill=MUTED, font=self.fonts["mono"])
 
         x, span, _ = spans["chance"]
         self._pill(x + span - FIELD_PAD, middle, row["chance"], row["kind"])
 
     def _pill(self, right, middle, label, kind):
-        fill, ink, dot = PILL_STYLES.get(kind, PILL_STYLES["grey"])
+        fill, ink, edge = PILL_STYLES.get(kind, PILL_STYLES["grey"])
         measure = tkfont.Font(font=self.fonts["small"])
-        width = measure.measure(label) + 34
+        width = measure.measure(label) + 26
         left = right - width
-        _round_rect(self.body, left, middle - 11, right, middle + 11, 11,
-                    fill=fill, outline="")
-        self.body.create_oval(left + 10, middle - 3, left + 16, middle + 3,
-                              fill=dot, outline=dot)
-        self.body.create_text(left + 22, middle, text=label, anchor="w",
+        _round_rect(self.body, left, middle - 12, right, middle + 12, 12,
+                    fill=fill, outline=edge, dash=DASH)
+        self.body.create_text((left + right) // 2, middle, text=label,
                               fill=ink, font=self.fonts["small"])
 
     @staticmethod
@@ -1167,18 +1307,24 @@ class App:
         except tk.TclError:
             pass
 
-        self.font_body = _first_font(
-            self.root, ["SF Pro Text", "Segoe UI", "Inter", "DejaVu Sans"], 12)
-        self.font_small = _first_font(
-            self.root, ["SF Pro Text", "Segoe UI", "Inter", "DejaVu Sans"], 11)
-        self.font_title = _first_font(
-            self.root, ["SF Pro Display", "Segoe UI Semibold", "Inter",
-                        "DejaVu Sans"], 20, "bold")
-        self.font_section = _first_font(
-            self.root, ["SF Pro Text", "Segoe UI Semibold", "Inter",
-                        "DejaVu Sans"], 10, "bold")
-        self.font_mono = _first_font(
-            self.root, ["SF Mono", "Menlo", "Consolas", "DejaVu Sans Mono"], 11)
+        # Two families do the whole window: a geometric sans for the things
+        # you read as language, and a monospace for the things you read as
+        # data - file names, paths, sizes, timestamps. A filename is data.
+        # Lining them up in a column is half of what makes a long list
+        # readable, and no proportional font will do it.
+        sans = ["Poppins", "Montserrat", "Inter", "SF Pro Text", "Segoe UI",
+                "Avenir Next", "Helvetica Neue", "DejaVu Sans"]
+        display = ["Poppins", "Montserrat", "Inter", "SF Pro Display",
+                   "Segoe UI", "Avenir Next", "Helvetica Neue", "DejaVu Sans"]
+        mono = ["JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Monaco",
+                "DejaVu Sans Mono"]
+        self.font_body = _first_font(self.root, sans, 12)
+        self.font_small = _first_font(self.root, sans, 11)
+        self.font_title = _first_font(self.root, display, 22)
+        self.font_card = _first_font(self.root, sans, 13)
+        self.font_section = _first_font(self.root, sans, 10, "bold")
+        self.font_mono = _first_font(self.root, mono, 11)
+        self.font_mono_small = _first_font(self.root, mono, 10)
 
         s.configure(".", background=BG, foreground=INK, font=self.font_body)
         s.configure("TFrame", background=BG)
@@ -1190,15 +1336,15 @@ class App:
         s.configure("Title.TLabel", background=BG, foreground=INK,
                     font=self.font_title)
         s.configure("Sub.TLabel", background=BG, foreground=MUTED,
-                    font=self.font_small)
+                    font=self.font_body)
         s.configure("Status.TLabel", background=SIDEBAR, foreground=FAINT,
-                    font=self.font_small)
+                    font=self.font_mono_small)
 
         # Nothing else in this window is a ttk widget any more: the table,
         # the fields, the buttons, the dropdown and the checkboxes are all
         # drawn by this app, because no platform theme will round a corner
         # or draw a one-pixel border. The progress bar is the last holdout.
-        s.configure("Thin.Horizontal.TProgressbar", troughcolor=LINE,
+        s.configure("Thin.Horizontal.TProgressbar", troughcolor=LINE_SOFT,
                     background=ACCENT, borderwidth=0, thickness=4)
 
     # -- the window ---------------------------------------------------------
@@ -1232,7 +1378,7 @@ class App:
         rail.columnconfigure(0, weight=1)
         rail.rowconfigure(0, weight=1)
 
-        tk.Frame(self.root, background=LINE, width=1).grid(
+        DashedRule(self.root, vertical=True, background=SIDEBAR).grid(
             row=0, column=0, sticky="nse")
 
         # The settings scroll; the scan button does not. In deep-scan mode
@@ -1273,16 +1419,16 @@ class App:
         def section(text, top):
             """A heading, always the same size and always the same gap."""
             place(tk.Label(content, text=text, background=SIDEBAR,
-                           foreground=FAINT, font=self.font_section,
+                           foreground=MUTED, font=self.font_section,
                            anchor="w"), top=top, bottom=8)
 
         # --- brand and the promise the whole program rests on
         brand = tk.Frame(content, background=SIDEBAR)
-        tk.Label(brand, text=APP_NAME, background=SIDEBAR, foreground=ACCENT,
+        tk.Label(brand, text=APP_NAME, background=SIDEBAR, foreground=INK,
                  font=self.font_title).pack(side="left")
         tk.Label(brand, text=VERSION, background=SIDEBAR, foreground=FAINT,
-                 font=self.font_small).pack(side="left", padx=(7, 0),
-                                            pady=(9, 0))
+                 font=self.font_mono_small).pack(side="left", padx=(8, 0),
+                                                 pady=(11, 0))
         place(brand, top=22, bottom=14)
         place(Badge(content,
                     "Read-only mode. Your source drive is never written to.",
@@ -1319,7 +1465,7 @@ class App:
                  20)):
             card = ModeCard(content, title, blurb,
                             chosen=value == self.mode_var.get(),
-                            title_font=self.font_body,
+                            title_font=self.font_card,
                             blurb_font=self.font_small,
                             background=SIDEBAR,
                             command=lambda v=value: self._choose_mode(v))
@@ -1328,7 +1474,7 @@ class App:
         # --- file types, only relevant to deep scan
         self.types_row = tk.Frame(content, background=SIDEBAR)
         tk.Label(self.types_row, text="FILE TYPES", background=SIDEBAR,
-                 foreground=FAINT, font=self.font_section, anchor="w").grid(
+                 foreground=MUTED, font=self.font_section, anchor="w").grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
         self.type_vars = {}
         for column in range(3):
@@ -1345,17 +1491,17 @@ class App:
         section("RECOVER TO", top=0)
         self.dest_var = tk.StringVar(
             value=os.path.join(os.path.expanduser("~"), "Recovered"))
-        place(Field(content, self.dest_var, self.font_small,
+        place(Field(content, self.dest_var, self.font_mono,
                     background=SIDEBAR, icon="folder"), bottom=6)
-        place(LinkButton(content, "Choose folder\u2026", self._pick_dest,
-                         font=self.font_small, background=SIDEBAR),
-              bottom=18, fill=False)
+        place(PillButton(content, "Choose folder\u2026", kind="ghost",
+                         font=self.font_small, background=SIDEBAR,
+                         command=self._pick_dest), bottom=18)
 
         # --- the footer, outside the scrolling part
         footer = tk.Frame(rail, background=SIDEBAR)
         footer.grid(row=1, column=0, columnspan=2, sticky="we")
         footer.columnconfigure(0, weight=1)
-        tk.Frame(footer, background=LINE, height=1).grid(
+        DashedRule(footer, vertical=False, background=SIDEBAR).grid(
             row=0, column=0, sticky="we")
         self.scan_btn = PillButton(footer, "Start scan", command=self._start,
                                    kind="primary", font=self.font_body,
@@ -1375,7 +1521,7 @@ class App:
                            pady=(0, 8))
         self.progress.grid_remove()
         tk.Label(footer, textvariable=self.status_var, background=SIDEBAR,
-                 foreground=FAINT, font=self.font_small,
+                 foreground=FAINT, font=self.font_mono_small,
                  wraplength=text_width).grid(row=4, column=0, pady=(0, 18))
 
         self._bind_wheel(rail)
@@ -1484,6 +1630,7 @@ class App:
         self.tree = ResultTable(main, {"body": self.font_body,
                                        "small": self.font_small,
                                        "mono": self.font_mono,
+                                       "mono_small": self.font_mono_small,
                                        "section": self.font_section},
                                 on_select=self._update_buttons,
                                 on_sort=self._sort)
@@ -1493,10 +1640,11 @@ class App:
         # rectangle tells the user nothing about whether the app is working,
         # still thinking, or finished and empty-handed.
         self.empty = tk.Frame(self.tree.body, background=PANEL)
+        self.tree.body.configure(background=PANEL)
         self.empty_title = tk.StringVar()
         self.empty_hint = tk.StringVar()
         tk.Label(self.empty, textvariable=self.empty_title, background=PANEL,
-                 foreground=MUTED, font=self.font_body).pack()
+                 foreground=MUTED, font=self.font_card).pack()
         tk.Label(self.empty, textvariable=self.empty_hint, background=PANEL,
                  foreground=FAINT, font=self.font_small, wraplength=420,
                  justify="center").pack(pady=(6, 0))
@@ -1505,20 +1653,10 @@ class App:
         self._show_empty(True)          # the window opens with nothing in it
 
         # --- the admin warning, which only appears when it applies
-        self.warning = tk.Frame(main, background=BG)
+        self.warning = WarningBar(main, self.font_small, self.font_mono,
+                                  background=BG)
         self.warning.grid(row=3, column=0, sticky="we", padx=GUTTER,
-                          pady=(12, 18))
-        mark = tk.Canvas(self.warning, width=16, height=16,
-                         highlightthickness=0, bd=0, background=BG)
-        mark.create_polygon(8, 1, 15, 14, 1, 14, fill="", outline=WARN,
-                            width=1.4)
-        mark.create_line(8, 5, 8, 9, fill=WARN, width=1.4)
-        mark.create_line(8, 11, 8, 11.5, fill=WARN, width=1.6)
-        mark.grid(row=0, column=0, padx=(0, 8))
-        self.warning_var = tk.StringVar()
-        tk.Label(self.warning, textvariable=self.warning_var, background=BG,
-                 foreground=MUTED, font=self.font_small, anchor="w").grid(
-            row=0, column=1, sticky="w")
+                          pady=(14, 20))
         self.warning.grid_remove()
 
     def _check_privileges(self):
@@ -1532,11 +1670,15 @@ class App:
         except Exception:
             pass
         if not elevated:
-            self.warning_var.set(
-                "Not running with admin rights \u2014 raw device scans will "
-                "fail. " + ("Restart as Administrator to enable scanning."
-                            if sys.platform == "win32"
-                            else "Restart with  sudo  to enable scanning."))
+            if sys.platform == "win32":
+                self.warning.say("Not running as Administrator \u2014 raw "
+                                 "device scans will fail. Reopen with "
+                                 "Run as administrator.")
+            else:
+                self.warning.say(
+                    "Not running with admin rights \u2014 raw device scans "
+                    "will fail. Restart with ", "sudo",
+                    " to enable scanning.")
             self.warning.grid()
 
     def _toggle_mode(self):

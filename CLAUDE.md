@@ -277,6 +277,14 @@ Agreed next steps, in order:
 
 ## Style
 
+- **The window is dark, and every border is dashed.** The palette is at the
+  top of `app.py`: an indigo ground, one lavender accent for what is ticked
+  and what is chosen, and `DASH` on every outline. `DarkChromeTests` sweeps
+  the built window for a widget still carrying a light background, which is
+  the one mistake in a dark interface that no behavioural test would catch.
+  Two font families carry it: a geometric sans for language, a monospace for
+  data - file names, paths, sizes and timestamps are data, and lining them
+  up in a column is half of what makes a long list readable.
 - **The window is built from four numbers.** `CONTROL_H`, `RADIUS`, `GUTTER`
   and `RAIL_W` at the top of `app.py` decide the size of everything you can
   click or type into. No widget picks its own height, and no layout invents
