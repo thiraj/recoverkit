@@ -56,6 +56,8 @@ from exfat import ExfatVolume
 from fat32 import Fat32Volume
 from ntfs import NtfsVolume
 
+# The protocol version, not the program's. It changes when the shape of
+# the JSON changes, so a caller can tell whether it still understands us.
 VERSION = "1.0"
 BATCH = 40
 

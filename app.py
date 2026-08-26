@@ -27,7 +27,10 @@ from fat32 import Fat32Volume
 from ntfs import NtfsVolume
 
 APP_NAME = "RecoverKit"
-VERSION = "1.0"
+# The released version of the program. Not the same number as the
+# protocol version in service.py, which describes the shape of the JSON
+# a caller sends and can stay put while this one moves.
+VERSION = "0.1.0"
 
 # Palette. Dark, indigo, one lavender accent. A recovery tool gets opened at
 # two in the morning by someone who has just lost a card full of photographs;
