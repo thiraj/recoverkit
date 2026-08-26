@@ -34,7 +34,7 @@ VERSION = "1.0"
 # a dark window is kinder at that hour, and the accent marks the two things
 # that matter - what is ticked, and what can still be saved.
 BG = "#232035"          # the working surface
-SIDEBAR = "#1e1b2e"     # the settings rail down the left
+SIDEBAR = "#1a1728"     # the settings rail down the left
 PANEL = "#262238"       # the table body
 BAND = "#2a2540"        # the table's heading band
 STRIP = "#221f34"       # the strip along its bottom
@@ -113,6 +113,14 @@ def human_size(n):
             return f"{n:,.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return ""
+
+
+def _looks_like_a_size(text):
+    """Is this fragment of a drive's description just "3.7 GB"?"""
+    parts = text.replace(",", "").split()
+    return (len(parts) == 2 and parts[1].upper() in ("B", "KB", "MB", "GB",
+                                                     "TB")
+            and parts[0].replace(".", "", 1).isdigit())
 
 
 def human_date(dt):
@@ -378,9 +386,15 @@ class ModeCard(tk.Canvas):
     different programs with different results, and the difference is worth a
     line of explanation each. A radio button with a label cannot carry that;
     a card can.
+
+    The card is as tall as its own words: the explanation wraps to the width
+    of the rail and the card grows to hold it, rather than the text running
+    out through the side.
     """
 
-    HEIGHT = 62
+    RADIO_X = 20             # centre of the dot
+    TEXT_X = 38              # where the title and its explanation both start
+    TOP = 14
 
     def __init__(self, master, title, blurb, chosen=False, command=None,
                  title_font=None, blurb_font=None, background=SIDEBAR, **kw):
@@ -390,7 +404,8 @@ class ModeCard(tk.Canvas):
         self._title_font = title_font
         self._blurb_font = blurb_font
         self.command = command
-        super().__init__(master, height=self.HEIGHT, highlightthickness=0,
+        self._height = 62
+        super().__init__(master, height=self._height, highlightthickness=0,
                          bd=0, background=background, takefocus=1, **kw)
         self.bind("<Configure>", lambda e: self._draw())
         for sequence in ("<Button-1>", "<Return>", "<space>"):
@@ -402,26 +417,51 @@ class ModeCard(tk.Canvas):
         self._chosen = chosen
         self._draw()
 
+    def _wrap(self, room):
+        measure = tkfont.Font(font=self._blurb_font)
+        lines, current = [], ""
+        for word in self._blurb.split():
+            trial = f"{current} {word}".strip()
+            if current and measure.measure(trial) > room:
+                lines.append(current)
+                current = word
+            else:
+                current = trial
+        if current:
+            lines.append(current)
+        return lines, measure.metrics("linespace")
+
     def _draw(self, hover=False):
         self.delete("all")
         width = self.winfo_width()
         if width <= 1:
             return
+        lines, step = self._wrap(width - self.TEXT_X - FIELD_PAD)
+        title_step = tkfont.Font(font=self._title_font).metrics("linespace")
+        height = self.TOP + title_step + 3 + len(lines) * step + self.TOP - 3
+        if height != self._height:
+            self._height = height
+            self.configure(height=height)      # the card grows to fit
+
         edge = ACCENT_EDGE if (self._chosen or hover) else LINE
-        _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, RADIUS,
+        _round_rect(self, 1, 1, width - 1, height - 1, RADIUS,
                     fill=ACCENT_SOFT if self._chosen else self["background"],
                     outline=edge, dash=DASH)
-        self.create_text(FIELD_PAD + 2, 20, text=self._title, anchor="w",
-                         fill=INK, font=self._title_font)
-        self.create_text(FIELD_PAD + 2, 41, text=self._blurb, anchor="w",
-                         fill=MUTED, font=self._blurb_font)
-        x, y = width - 22, self.HEIGHT // 2
+
+        y = self.TOP + title_step // 2
         if self._chosen:
-            self.create_oval(x - 6, y - 6, x + 6, y + 6, fill=ACCENT,
-                             outline=ACCENT)
+            self.create_oval(self.RADIO_X - 8, y - 8, self.RADIO_X + 8, y + 8,
+                             fill=ACCENT, outline=ACCENT)
         else:
-            self.create_oval(x - 6, y - 6, x + 6, y + 6, fill="",
-                             outline=LINE, dash=DASH)
+            self.create_oval(self.RADIO_X - 8, y - 8, self.RADIO_X + 8, y + 8,
+                             fill="", outline=LINE, dash=DASH)
+        self.create_text(self.TEXT_X, y, text=self._title, anchor="w",
+                         fill=INK, font=self._title_font)
+        y = self.TOP + title_step + 3 + step // 2
+        for line in lines:
+            self.create_text(self.TEXT_X, y, text=line, anchor="w",
+                             fill=MUTED, font=self._blurb_font)
+            y += step
 
 
 def file_icon(canvas, kind, x, y, colour=MUTED):
@@ -630,12 +670,18 @@ class Dropdown(tk.Canvas):
     RADIUS = RADIUS
 
     def __init__(self, master, textvariable, command=None, font=None,
-                 background=SIDEBAR, **kw):
+                 background=SIDEBAR, on_open=None, **kw):
         self.variable = textvariable
         # A direct callback rather than only a virtual event: Tk delivers
         # virtual events through the event loop, so a caller cannot rely on
         # having been told anything by the time `_choose` returns.
         self.command = command
+        # Asked just before the list opens. Drives come and go while the
+        # window is open - someone plugs the card in *after* starting the
+        # program at least as often as before - so the list is rebuilt at the
+        # moment it is about to be read rather than left to go stale behind a
+        # refresh button.
+        self.on_open = on_open
         self._values = []
         self._font = font or ("TkDefaultFont", 11)
         self._popup = None
@@ -684,7 +730,11 @@ class Dropdown(tk.Canvas):
 
     # -- open state ---------------------------------------------------------
     def _open(self):
-        if self._popup or not self._values:
+        if self._popup:
+            return
+        if self.on_open:
+            self.on_open()
+        if not self._values:
             return
         popup = tk.Toplevel(self)
         popup.overrideredirect(True)
@@ -900,7 +950,7 @@ class InfoBox(tk.Canvas):
         if width <= 1:
             return
         _round_rect(self, 1, 1, width - 1, self.HEIGHT - 1, RADIUS,
-                    fill=PANEL, outline=LINE, dash=DASH)
+                    fill=self["background"], outline=LINE, dash=DASH)
         meta = self.meta_var.get()
         room = width - FIELD_PAD * 2
         if meta:
@@ -1343,13 +1393,17 @@ class App:
                    "Segoe UI", "Avenir Next", "Helvetica Neue", "DejaVu Sans"]
         mono = ["JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Monaco",
                 "DejaVu Sans Mono"]
-        self.font_body = _first_font(self.root, sans, 12)
-        self.font_small = _first_font(self.root, sans, 11)
-        self.font_title = _first_font(self.root, display, 22)
-        self.font_card = _first_font(self.root, sans, 13)
-        self.font_section = _first_font(self.root, sans, 10, "bold")
-        self.font_mono = _first_font(self.root, mono, 11)
-        self.font_mono_small = _first_font(self.root, mono, 10)
+        # Sized against the rail, which is 230 pixels of usable width. At a
+        # point larger, "Fast - keeps original filenames." is 222 pixels wide
+        # and runs out through the side of its own card.
+        self.font_body = _first_font(self.root, sans, 11)
+        self.font_small = _first_font(self.root, sans, 10)
+        self.font_title = _first_font(self.root, display, 19)
+        self.font_card = _first_font(self.root, sans, 12)
+        self.font_card_small = _first_font(self.root, sans, 9)
+        self.font_section = _first_font(self.root, sans, 9, "bold")
+        self.font_mono = _first_font(self.root, mono, 10)
+        self.font_mono_small = _first_font(self.root, mono, 9)
 
         s.configure(".", background=BG, foreground=INK, font=self.font_body)
         s.configure("TFrame", background=BG)
@@ -1441,6 +1495,13 @@ class App:
             self._rail_row += 1
             return widget
 
+        def rule(bottom):
+            """A divider between blocks, edge to edge like the design."""
+            widget = DashedRule(content, vertical=False, background=SIDEBAR)
+            widget.grid(row=self._rail_row, column=0, sticky="we",
+                        pady=(0, bottom))
+            self._rail_row += 1
+
         def section(text, top):
             """A heading, always the same size and always the same gap."""
             place(tk.Label(content, text=text, background=SIDEBAR,
@@ -1457,7 +1518,8 @@ class App:
         place(brand, top=22, bottom=14)
         place(Badge(content,
                     "Read-only mode. Your source drive is never written to.",
-                    self.font_small, background=SIDEBAR), bottom=20)
+                    self.font_small, background=SIDEBAR), bottom=18)
+        rule(bottom=20)
 
         # --- drive
         section("DRIVE", top=0)
@@ -1465,8 +1527,9 @@ class App:
         self.drive_var = tk.StringVar()
         self.drive_box = place(
             Dropdown(content, textvariable=self.drive_var,
-                     command=self._show_drive_detail, font=self.font_small,
-                     background=SIDEBAR), bottom=8)
+                     command=self._show_drive_detail, font=self.font_body,
+                     background=SIDEBAR, on_open=self._refresh_drives),
+            bottom=8)
         # The device path lives under the box rather than inside it. A rail
         # this narrow truncates a long label without saying so, and the tail
         # is exactly the part that identifies the drive.
@@ -1474,24 +1537,22 @@ class App:
         self.drive_meta = tk.StringVar()
         self.detail_box = place(
             InfoBox(content, self.drive_detail, self.drive_meta,
-                    self.font_mono, self.font_small, background=SIDEBAR),
-            bottom=6)
-        place(LinkButton(content, "Refresh drives", self._refresh_drives,
-                         font=self.font_small, background=SIDEBAR),
-              bottom=20, fill=False)
+                    self.font_mono, self.font_mono, background=SIDEBAR),
+            bottom=22)
 
         # --- mode
         section("SCAN MODE", top=0)
         self.mode_var = tk.StringVar(value="undelete")
         self.mode_cards = {}
         for value, title, blurb, gap in (
-                ("undelete", "Undelete", "Fast. Keeps original filenames.", 8),
-                ("carve", "Deep scan", "Slow. Any drive, names may be lost.",
-                 20)):
+                ("undelete", "Undelete",
+                 "Fast \u2014 keeps original filenames.", 8),
+                ("carve", "Deep scan",
+                 "Slower \u2014 works on any drive, names may be lost.", 22)):
             card = ModeCard(content, title, blurb,
                             chosen=value == self.mode_var.get(),
                             title_font=self.font_card,
-                            blurb_font=self.font_small,
+                            blurb_font=self.font_card_small,
                             background=SIDEBAR,
                             command=lambda v=value: self._choose_mode(v))
             self.mode_cards[value] = place(card, bottom=gap)
@@ -1744,7 +1805,7 @@ class App:
         previous = self.drive_var.get()
         diskio.refresh()
         self.volumes = diskio.list_volumes()
-        labels = [self._short_label(v[0]) for v in self.volumes]
+        labels = self._unique_labels()
         self.drive_box["values"] = labels
 
         if previous in labels:
@@ -1758,30 +1819,87 @@ class App:
         self._show_drive_detail()
         return labels
 
-    @staticmethod
-    def _short_label(label):
-        """Name and facts, without the device path - that goes underneath."""
+    def _unique_labels(self):
+        """
+        The label shown for each drive, guaranteed to name only that drive.
+
+        Two cards can both be called NO NAME. A shortened label that lands on
+        two drives is not a cosmetic problem: choosing one of them would scan
+        the other, and the check that keeps the recovery folder off the
+        source drive would be comparing against the wrong device. Where the
+        short form collides, those drives keep their device path.
+        """
+        labels = [self._short_label(label) for label, _ in self.volumes]
+        clashes = {label for label in labels if labels.count(label) > 1}
+        out, self._by_label = [], {}
+        for (full, path), short in zip(self.volumes, labels):
+            if short in clashes:
+                short = f"{short}{diskio.PART}{path}"
+            out.append(short)
+            self._by_label[short] = path
+        return out
+
+    def _path_for(self, shown):
+        """The device behind the label on screen, or None."""
+        by_label = getattr(self, "_by_label", None)
+        if by_label and shown in by_label:
+            return by_label[shown]
+        for label, path in self.volumes:      # a label from before a refresh
+            if self._short_label(label) == shown:
+                return path
+        return None
+
+    # Words a drive's description uses for what kind of thing it is. What
+    # someone needs in a 230-pixel rail is "which drive is this" - the name
+    # and the kind. The size and the device path have their own box below.
+    KINDS = ("removable", "external", "internal", "system", "disk image")
+
+    @classmethod
+    def _short_label(cls, label):
+        """Name and kind, without the size or the device path."""
         parts = label.split(diskio.PART)
-        return diskio.PART.join(parts[:2]) if len(parts) > 2 else label
+        if len(parts) < 2:
+            return label
+        name, detail = parts[0], parts[1]
+        bits = [b.strip() for b in detail.split(",") if b.strip()]
+        for kind in cls.KINDS:
+            for bit in bits:
+                if kind in bit.lower():
+                    return f"{name}{diskio.PART}{bit}"
+        # Nothing said what kind of drive it is, so fall back to whatever it
+        # did say, minus anything that is only a size.
+        rest = [b for b in bits if not _looks_like_a_size(b)]
+        return f"{name}{diskio.PART}{rest[0]}" if rest else name
+
+    @staticmethod
+    def _drive_meta(label):
+        """The line under the box: filesystem and size, when they're known."""
+        parts = label.split(diskio.PART)
+        detail = parts[1] if len(parts) > 1 else ""
+        bits = [b.strip() for b in detail.split(",") if b.strip()]
+        wanted = []
+        for bit in bits:
+            if bit.upper() in ("APFS", "NTFS", "FAT32", "EXFAT", "HFS+",
+                               "EXT4", "FAT16", "FAT12"):
+                wanted.append(bit.upper() if bit.islower() else bit)
+            elif _looks_like_a_size(bit):
+                wanted.append(bit)
+        return "  \u00b7  ".join(wanted)
 
     def _show_drive_detail(self):
         """Show the raw device path for whichever drive is selected."""
-        chosen = self.drive_var.get()
+        chosen = self._path_for(self.drive_var.get())
         for label, path in self.volumes:
-            if self._short_label(label) == chosen:
+            if path == chosen:
                 self.drive_detail.set(path)
-                parts = label.split(diskio.PART)
-                self.drive_meta.set(parts[1] if len(parts) > 1 else "")
+                self.drive_meta.set(self._drive_meta(label))
                 return
         self.drive_detail.set("")
         self.drive_meta.set("")
 
     def _source_path(self):
         name = self.drive_var.get()
-        for display, path in self.volumes:
-            if self._short_label(display) == name:
-                return path
-        return name
+        return self._path_for(name) or name
 
     def _confirm_drive_still_there(self, source):
         """

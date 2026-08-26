@@ -38,6 +38,7 @@ HAVE_WORKING_TK = tk_works()
 
 if HAVE_WORKING_TK:
     import tkinter as tk
+    import tkinter.font as tkfont
     import app as appmod
     import carve
     import ntfs
@@ -680,6 +681,114 @@ class RecoveryFolderTests(NoDialogs, unittest.TestCase):
     def test_the_search_box_is_still_a_place_to_type(self):
         """The read-only treatment is for one field, not for every field."""
         self.assertEqual(str(self.app.search_entry.cget("state")), "normal")
+
+
+class SidebarTests(NoDialogs, unittest.TestCase):
+    """
+    The rail, measured rather than eyeballed.
+
+    Text running out through the side of its own card is the failure this
+    class exists for: it is invisible to every behavioural test, and it is
+    the first thing a person sees.
+    """
+
+    def setUp(self):
+        self.silence_dialogs()
+        self.root = tk.Tk()
+        self.addCleanup(self.root.destroy)
+        self.app = appmod.App(self.root)
+        self.root.geometry("1180x760+60+60")
+        self.root.deiconify()
+        self.root.update()
+
+    def test_no_text_in_the_rail_runs_outside_its_own_box(self):
+        """
+        Measured from what was drawn, not from what we meant to draw. Every
+        control in the rail is a canvas, so the bounding box of each piece of
+        text on it can simply be asked for - and text crossing the border of
+        the card or field it belongs to is exactly the failure no
+        behavioural test would ever notice.
+        """
+        overflowing = []
+
+        def check(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tk.Canvas) and child.winfo_ismapped():
+                    width = child.winfo_width()
+                    height = child.winfo_height()
+                    for item in child.find_all():
+                        if child.type(item) != "text":
+                            continue
+                        x1, y1, x2, y2 = child.bbox(item)
+                        if x2 > width - 2 or x1 < -1 or y2 > height + 1:
+                            overflowing.append(
+                                f"{child.__class__.__name__}: "
+                                f"{child.itemcget(item, 'text')[:40]!r} "
+                                f"({x1},{y1})-({x2},{y2}) in {width}x{height}")
+                check(child)
+
+        check(self.root)
+        self.assertEqual(overflowing, [])
+
+    def test_a_card_grows_to_hold_a_longer_explanation(self):
+        """The deep-scan sentence wraps; its card has to be taller for it."""
+        short = self.app.mode_cards["undelete"]
+        long = self.app.mode_cards["carve"]
+        self.assertGreater(long.winfo_height(), short.winfo_height())
+        lines, step = long._wrap(long.winfo_width() - long.TEXT_X
+                                 - appmod.FIELD_PAD)
+        self.assertGreaterEqual(long.winfo_height(),
+                                long.TOP * 2 + len(lines) * step)
+
+    def test_choosing_a_mode_moves_the_dot(self):
+        self.app._choose_mode("carve")
+        self.assertTrue(self.app.mode_cards["carve"]._chosen)
+        self.assertFalse(self.app.mode_cards["undelete"]._chosen)
+        self.assertEqual(self.app.mode_var.get(), "carve")
+
+    def test_the_drive_label_drops_the_size_and_keeps_the_kind(self):
+        """The rail is 230 pixels wide; the size has its own line below."""
+        full = f"TESTCARD{appmod.diskio.PART}not mounted, 3.7 GB, " \
+               f"removable{appmod.diskio.PART}/dev/disk4s1"
+        shown = self.app._short_label(full)
+        self.assertIn("TESTCARD", shown)
+        self.assertIn("removable", shown)
+        self.assertNotIn("3.7 GB", shown)
+        self.assertNotIn("/dev/disk4s1", shown)
+        self.assertEqual(self.app._drive_meta(full), "3.7 GB")
+
+    def test_the_meta_line_names_the_filesystem_when_it_is_known(self):
+        full = f"Data{appmod.diskio.PART}APFS, internal{appmod.diskio.PART}" \
+               f"/dev/disk1s5"
+        self.assertEqual(self.app._drive_meta(full), "APFS")
+
+    def test_two_drives_that_shorten_alike_keep_their_device_paths(self):
+        """
+        Not cosmetic. A label that names two drives means picking one and
+        scanning the other - and the check that keeps the recovery folder off
+        the source drive would then be comparing against the wrong device.
+        """
+        part = appmod.diskio.PART
+        self.app.volumes = [
+            (f"NO NAME{part}not mounted, 3.7 GB, removable{part}/dev/disk4s1",
+             "/dev/disk4s1"),
+            (f"NO NAME{part}not mounted, 7.5 GB, removable{part}/dev/disk5s1",
+             "/dev/disk5s1")]
+        labels = self.app._unique_labels()
+        self.assertEqual(len(set(labels)), 2, "both drives got one label")
+        self.app.drive_var.set(labels[1])
+        self.assertEqual(self.app._source_path(), "/dev/disk5s1")
+
+    def test_opening_the_drive_list_looks_for_drives_again(self):
+        """
+        People plug the card in after starting the program at least as often
+        as before, so the list is rebuilt when it is about to be read.
+        """
+        asked = []
+        self.app.drive_box.on_open = lambda: asked.append(True)
+        self.app.drive_box._open()
+        self.addCleanup(self.app.drive_box._close)
+        self.assertTrue(asked, "the drive list was not refreshed on opening")
 
 
 class DarkChromeTests(NoDialogs, unittest.TestCase):

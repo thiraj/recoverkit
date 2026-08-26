@@ -285,6 +285,21 @@ Agreed next steps, in order:
   Two font families carry it: a geometric sans for language, a monospace for
   data - file names, paths, sizes and timestamps are data, and lining them
   up in a column is half of what makes a long list readable.
+- **Text is measured, not eyeballed.** Type sizes are chosen against the
+  230 pixels a rail control actually has: a point larger and "Fast - keeps
+  original filenames." is 222 pixels wide and runs out through the side of
+  its own card. Anything that can wrap does (`ModeCard`, `Badge`) and the
+  box grows to fit; anything that cannot truncates with an ellipsis
+  (`Dropdown`, `InfoBox`, table cells).
+  `SidebarTests.test_no_text_in_the_rail_runs_outside_its_own_box` asks each
+  canvas for the bounding box of every piece of text it drew and fails if
+  any of it crosses the border of the control it belongs to.
+- **A drive label names one drive.** `_short_label` shortens "NO NAME - not
+  mounted, 3.7 GB, removable" to "NO NAME - removable" to fit the rail, and
+  `_unique_labels` puts the device path back on any two drives that shorten
+  to the same words. That is not tidiness: a label naming two drives means
+  picking one and scanning the other, and the same-drive guard would then be
+  comparing the recovery folder against the wrong device.
 - **The window is built from four numbers.** `CONTROL_H`, `RADIUS`, `GUTTER`
   and `RAIL_W` at the top of `app.py` decide the size of everything you can
   click or type into. No widget picks its own height, and no layout invents
