@@ -213,7 +213,10 @@ RecoverKit exists because PhotoRec is hard to use and can't search by filename.
 
 ## Licence
 
-MIT. Use it, fork it, ship it, charge for it — no restrictions.
+MIT — see [LICENSE](LICENSE).
+
+Patches are welcome. Commits need a `Signed-off-by` line; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 
